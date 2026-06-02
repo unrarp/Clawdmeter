@@ -5,8 +5,9 @@ firmware/.vscode/
 # OS
 .DS_Store
 
-# Claude Code
-.claude/
+# Claude Code — ignore local settings/state, but track shared project rules
+.claude/*
+!.claude/rules/
 
 # Node tooling deps (npm install --no-save)
 tools/node_modules/
