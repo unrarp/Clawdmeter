@@ -9,6 +9,7 @@
 LV_FONT_DECLARE(font_tiempos_56);
 LV_FONT_DECLARE(font_tiempos_34);
 LV_FONT_DECLARE(font_styrene_48);
+LV_FONT_DECLARE(font_styrene_36);
 LV_FONT_DECLARE(font_styrene_28);
 LV_FONT_DECLARE(font_styrene_24);
 LV_FONT_DECLARE(font_styrene_20);
@@ -24,21 +25,31 @@ struct Layout {
     int16_t scr_w, scr_h;
     int16_t margin;
     int16_t title_y;
+    int16_t logo_y;                // logo top; title + battery center against this row
     int16_t content_y;
     int16_t content_w;
+    const lv_font_t* title_font;   // shared by both screen titles
 
     // Usage screen
     int16_t usage_panel_h;
     int16_t usage_panel_gap;
     int16_t usage_bar_y;
     int16_t usage_reset_y;
+    const lv_font_t* usage_pct_font;
+    const lv_font_t* usage_pill_font;
+    const lv_font_t* usage_reset_font;
 
     // Bluetooth screen
     int16_t bt_info_panel_h;
     int16_t bt_reset_zone_h;
-    const lv_font_t* bt_title_font;
+    uint16_t bt_icon_scale;  // LVGL image zoom for the status icon (256 = 100%, == LV_SCALE_NONE)
+    int16_t bt_status_x;     // x of status text, after the (possibly scaled) icon
+    int16_t bt_status_y;     // shared y for the status icon and the status label
+    int16_t bt_device_y;
+    int16_t bt_mac_y;
     const lv_font_t* bt_status_font;
-    const lv_font_t* bt_device_font;
+    const lv_font_t* bt_device_font;  // also used for the MAC line
+    const lv_font_t* bt_reset_font;
     const lv_font_t* bt_credit_1_font;
     const lv_font_t* bt_credit_2_font;
 };
@@ -53,38 +64,66 @@ static void compute_layout(const BoardCaps& c) {
     L.scr_h = c.height;
     L.margin = 20;
     L.title_y = 30;
+    L.logo_y = L.title_y - 10;   // logo top; the title/battery row centers against this
+
+    // Values shared by both breakpoints — kept out of the if/else so only the
+    // genuinely size-dependent values differ between the two branches.
+    L.content_y        = 110;    // clears the 80px logo (bottom at logo_y + LOGO_HEIGHT) with padding
+    L.usage_panel_gap  = 16;
+    L.usage_pill_font  = &font_styrene_28;
+    L.usage_reset_font = &font_styrene_28;
+    L.bt_reset_font    = &font_styrene_28;
 
     if (c.height >= 460) {
         // Large layout — tuned for 480x480 (AMOLED-2.16).
-        L.content_y = 100;
+        L.title_font       = &font_tiempos_56;
         L.usage_panel_h = 150;
-        L.usage_panel_gap = 16;
         L.usage_bar_y = 56;
         L.usage_reset_y = 94;
+        L.usage_pct_font   = &font_styrene_48;
         L.bt_info_panel_h = 160;
         L.bt_reset_zone_h = 110;
-        L.bt_title_font    = &font_tiempos_56;
+        L.bt_icon_scale = 256;   // status icon at native 48px (LV_SCALE_NONE — no transform)
+        L.bt_status_x = 56;
+        L.bt_status_y = 2;
+        L.bt_device_y = 64;
+        L.bt_mac_y = 100;
         L.bt_status_font   = &font_styrene_48;
         L.bt_device_font   = &font_styrene_28;
         L.bt_credit_1_font = &font_styrene_24;
         L.bt_credit_2_font = &font_styrene_20;
     } else {
-        // Compact layout — tuned for 368x448 (AMOLED-1.8).
-        L.content_y = 85;
-        L.usage_panel_h = 130;
-        L.usage_panel_gap = 12;
+        // Compact layout — tuned for 368x448 (AMOLED-1.8). The panel is only
+        // ~7% shorter than the square, so heights/fonts stay close to the
+        // large layout; the title shrinks only because "Bluetooth" at 56px
+        // would overrun the narrower (368px) width. Panels shrink just enough
+        // to keep the two panels + bottom animation fitting in 448px.
+        L.title_font       = &font_tiempos_34;
+        L.usage_panel_h = 134;
         L.usage_bar_y = 48;
-        L.usage_reset_y = 78;
-        L.bt_info_panel_h = 140;
-        L.bt_reset_zone_h = 90;
-        L.bt_title_font    = &font_tiempos_34;
+        L.usage_reset_y = 78;    // ends ~2px above the panel content bottom (clearance for descenders)
+        L.usage_pct_font   = &font_styrene_36;   // headline %, a step down from 48 so the row breathes
+        L.bt_info_panel_h = 150;
+        L.bt_reset_zone_h = 96;
+        L.bt_icon_scale = 160;   // scale status icon 48px -> ~30px to match the 28px status text
+        L.bt_status_x = 44;
+        L.bt_status_y = 4;
+        L.bt_device_y = 58;
+        L.bt_mac_y = 92;
         L.bt_status_font   = &font_styrene_28;
-        L.bt_device_font   = &font_styrene_20;
-        L.bt_credit_1_font = &font_styrene_16;
-        L.bt_credit_2_font = &font_styrene_14;
+        L.bt_device_font   = &font_styrene_20;   // device + MAC; 24px overflowed the 296px inner width
+        L.bt_credit_1_font = &font_styrene_20;
+        L.bt_credit_2_font = &font_styrene_16;
     }
 
     L.content_w = L.scr_w - 2 * L.margin;
+}
+
+// Vertically center a top-row item of pixel height `item_h` against the logo,
+// whose box is [logo_y, logo_y + LOGO_HEIGHT]. Keeps the title and battery
+// aligned with the (taller) logo instead of riding high in the row.
+static int16_t row_center_y(int item_h) {
+    return (int16_t)(L.logo_y + (LOGO_HEIGHT - item_h) / 2);
 }
 
 // Anthropic brand palette — design tokens live in theme.h
@@ -220,6 +259,18 @@ static lv_obj_t* make_panel(lv_obj_t* parent, int x, int y, int w, int h) {
     return panel;
 }
 
+// Screen title in the top row. The +16 x-offset centers it horizontally in the
+// gap between the logo (left) and the battery icon (right); the y centers it
+// vertically against the logo. Shared by the usage and bluetooth screens.
+static lv_obj_t* make_title(lv_obj_t* parent, const char* text) {
+    lv_obj_t* lbl = lv_label_create(parent);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, L.title_font, 0);
+    lv_obj_set_style_text_color(lbl, COL_TEXT, 0);
+    lv_obj_align(lbl, LV_ALIGN_TOP_MID, 16, row_center_y(lv_font_get_line_height(L.title_font)));
+    return lbl;
+}
+
 static lv_obj_t* make_bar(lv_obj_t* parent, int x, int y, int w, int h) {
     lv_obj_t* bar = lv_bar_create(parent);
     lv_obj_set_pos(bar, x, y);
@@ -253,10 +304,10 @@ static void init_icon_dsc_rgb565a8(lv_image_dsc_t* dsc, int w, int h, const uint
     dsc->data_size = w * h * 3;
 }
 
-static lv_obj_t* make_pill(lv_obj_t* parent, const char* text) {
+static lv_obj_t* make_pill(lv_obj_t* parent, const char* text, const lv_font_t* font) {
     lv_obj_t* lbl = lv_label_create(parent);
     lv_label_set_text(lbl, text);
-    lv_obj_set_style_text_font(lbl, &font_styrene_28, 0);
+    lv_obj_set_style_text_font(lbl, font, 0);
     lv_obj_set_style_text_color(lbl, COL_TEXT, 0);
     lv_obj_set_style_bg_color(lbl, COL_BAR_BG, 0);
     lv_obj_set_style_bg_opa(lbl, LV_OPA_COVER, 0);
@@ -285,18 +336,18 @@ static void make_usage_panel(lv_obj_t* parent, int y, const char* pill_text,
 
     *out_pct = lv_label_create(panel);
     lv_label_set_text(*out_pct, "---%");
-    lv_obj_set_style_text_font(*out_pct, &font_styrene_48, 0);
+    lv_obj_set_style_text_font(*out_pct, L.usage_pct_font, 0);
     lv_obj_set_style_text_color(*out_pct, COL_TEXT, 0);
     lv_obj_set_pos(*out_pct, 0, 0);
 
-    *out_pill = make_pill(panel, pill_text);
+    *out_pill = make_pill(panel, pill_text, L.usage_pill_font);
     lv_obj_align(*out_pill, LV_ALIGN_TOP_RIGHT, 0, 1);
 
     *out_bar = make_bar(panel, 0, L.usage_bar_y, L.content_w - 32, 24);
 
     *out_reset = lv_label_create(panel);
     lv_label_set_text(*out_reset, "---");
-    lv_obj_set_style_text_font(*out_reset, &font_styrene_28, 0);
+    lv_obj_set_style_text_font(*out_reset, L.usage_reset_font, 0);
     lv_obj_set_style_text_color(*out_reset, COL_DIM, 0);
     lv_obj_set_pos(*out_reset, 0, L.usage_reset_y);
 }
@@ -311,11 +362,7 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(usage_container, global_click_cb, LV_EVENT_CLICKED, NULL);
 
-    lbl_title = lv_label_create(usage_container);
-    lv_label_set_text(lbl_title, "Usage");
-    lv_obj_set_style_text_font(lbl_title, &font_tiempos_56, 0);
-    lv_obj_set_style_text_color(lbl_title, COL_TEXT, 0);
-    lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 16, L.title_y);
+    lbl_title = make_title(usage_container, "Usage");
 
     make_usage_panel(usage_container, L.content_y, "Current",
                      &lbl_session_pct, &lbl_session_label,
@@ -329,7 +376,7 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_label_set_text(lbl_anim, "");
     lv_obj_set_style_text_font(lbl_anim, &font_mono_32, 0);
     lv_obj_set_style_text_color(lbl_anim, COL_ACCENT, 0);
-    lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, -15);
+    lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, -12);
 }
 
 // ======== Bluetooth Screen ========
@@ -344,11 +391,7 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
     lv_obj_clear_flag(ble_container, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(ble_container, global_click_cb, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t* lbl_ble_title = lv_label_create(ble_container);
-    lv_label_set_text(lbl_ble_title, "Bluetooth");
-    lv_obj_set_style_text_font(lbl_ble_title, L.bt_title_font, 0);
-    lv_obj_set_style_text_color(lbl_ble_title, COL_TEXT, 0);
-    lv_obj_align(lbl_ble_title, LV_ALIGN_TOP_MID, 16, L.title_y);
+    make_title(ble_container, "Bluetooth");
 
     lv_obj_t* p_info = make_panel(ble_container, L.margin, L.content_y,
                                   L.content_w, L.bt_info_panel_h);
@@ -358,25 +401,32 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
 
     lv_obj_t* bt_img = lv_image_create(p_info);
     lv_image_set_src(bt_img, &icon_bt_dsc);
-    lv_obj_set_pos(bt_img, 0, 0);
+    // Only scale when the layout actually shrinks the icon (compact). Skipping
+    // the call at native size avoids LVGL's per-redraw transform path on the
+    // large layout; the compact layout pays it by design to match the 28px text.
+    if (L.bt_icon_scale != LV_SCALE_NONE) {
+        lv_image_set_pivot(bt_img, 0, 0);        // scale toward top-left so pos stays predictable
+        lv_image_set_scale(bt_img, L.bt_icon_scale);
+    }
+    lv_obj_set_pos(bt_img, 0, L.bt_status_y);
 
     lbl_ble_status = lv_label_create(p_info);
     lv_label_set_text(lbl_ble_status, "Initializing...");
     lv_obj_set_style_text_font(lbl_ble_status, L.bt_status_font, 0);
     lv_obj_set_style_text_color(lbl_ble_status, COL_DIM, 0);
-    lv_obj_set_pos(lbl_ble_status, 56, 2);
+    lv_obj_set_pos(lbl_ble_status, L.bt_status_x, L.bt_status_y);
 
     lbl_ble_device = lv_label_create(p_info);
     lv_label_set_text(lbl_ble_device, "Device: ---");
     lv_obj_set_style_text_font(lbl_ble_device, L.bt_device_font, 0);
     lv_obj_set_style_text_color(lbl_ble_device, COL_DIM, 0);
-    lv_obj_set_pos(lbl_ble_device, 0, 64);
+    lv_obj_set_pos(lbl_ble_device, 0, L.bt_device_y);
 
     lbl_ble_mac = lv_label_create(p_info);
     lv_label_set_text(lbl_ble_mac, "Address: ---");
     lv_obj_set_style_text_font(lbl_ble_mac, L.bt_device_font, 0);
     lv_obj_set_style_text_color(lbl_ble_mac, COL_DIM, 0);
-    lv_obj_set_pos(lbl_ble_mac, 0, 100);
+    lv_obj_set_pos(lbl_ble_mac, 0, L.bt_mac_y);
 
     int reset_y = L.content_y + L.bt_info_panel_h + 16;
     lv_obj_t* reset_zone = lv_obj_create(ble_container);
@@ -399,7 +449,7 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
 
     lv_obj_t* reset_lbl = lv_label_create(reset_zone);
     lv_label_set_text(reset_lbl, "Reset Bluetooth");
-    lv_obj_set_style_text_font(reset_lbl, L.bt_device_font, 0);
+    lv_obj_set_style_text_font(reset_lbl, L.bt_reset_font, 0);
     lv_obj_set_style_text_color(reset_lbl, COL_DIM, 0);
 
     lv_obj_t* lbl_credit = lv_label_create(ble_container);
@@ -439,11 +489,12 @@ void ui_init(void) {
 
     logo_img = lv_image_create(scr);
     lv_image_set_src(logo_img, &logo_dsc);
-    lv_obj_set_pos(logo_img, L.margin, L.title_y - 10);
+    lv_obj_set_pos(logo_img, L.margin, L.logo_y);
 
     battery_img = lv_image_create(scr);
     lv_image_set_src(battery_img, &battery_dscs[0]);
-    lv_obj_set_pos(battery_img, L.scr_w - 48 - L.margin, L.title_y);
+    // Center the battery against the logo, matching the title (see row_center_y).
+    lv_obj_set_pos(battery_img, L.scr_w - ICON_BATTERY_W - L.margin, row_center_y(ICON_BATTERY_H));
 }
 
 void ui_update(const UsageData* data) {

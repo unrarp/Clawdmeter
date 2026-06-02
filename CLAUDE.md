@@ -55,7 +55,7 @@ firmware/src/
   data.h                    — UsageData struct
   icons.h                   — icon arrays. Battery (5×) are RGB565A8 with alpha; rest are raw RGB565.
   logo.h                    — 80×80 RGB565 logo
-  font_*.c                  — pre-compiled LVGL 9 bitmap fonts (Tiempos 56/34, Styrene 48/28/24/20/16/14/12, Mono 32/18)
+  font_*.c                  — pre-compiled LVGL 9 bitmap fonts (Tiempos 56/34, Styrene 48/36/28/24/20/16/14/12, Mono 32/18)
   splash_animations.h       — generated, do not hand-edit
 docs/porting/               — adding-a-board.md, hal-contract.md, capability-flags.md
 ```
@@ -120,6 +120,7 @@ See `~/.claude/projects/.../memory/` files for persistent context (user is an em
 
 ## Recent session highlights
 
+- **Compact-layout polish (2026-06-02).** Retuned the compact (368×448) breakpoint in `compute_layout()`, which was over-shrunk: panels and fonts now stay close to the large layout (the 1.8" is only ~7% shorter). Moved the remaining hardcoded Usage fonts + Bluetooth offsets/fonts into the `Layout` struct, added `font_styrene_36` for the `%` headline, and added `row_center_y()` to vertically center the title + battery against the logo (driven by `L.logo_y`). Both breakpoints now share `content_y`/`usage_panel_gap`/label fonts (set once before the `if/else`).
 - **Device-abstraction refactor (2026-05-18).** All board-conditional code moved out of shared files into `boards/<name>/` and behind a HAL in `hal/`. ~30 `#ifdef BOARD_*` blocks went to zero. UI is responsive via `compute_layout()` driven by `board_caps()`. New ports add a folder + a PlatformIO env — no shared file edits.
 - Added second board port: Waveshare AMOLED-1.8 (368×448 portrait, SH8601, FT3168, XCA9554 IO expander).
 - Migrated from Panlee SC01 Plus (480×320 IPS) to Waveshare 2.16" AMOLED (480×480 square). Full hardware/library swap.

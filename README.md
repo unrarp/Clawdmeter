@@ -175,8 +175,8 @@ lv_font_conv --font assets/TiemposText-400-Regular.otf -r 0x20-0x7E \
   --size 56 --format lvgl --bpp 4 --no-compress \
   -o firmware/src/font_tiempos_56.c --lv-include "lvgl.h"
 
-# Styrene B (large numbers 48, panel labels 28, small text 24, minimal 20)
-for size in 48 28 24 20; do
+# Styrene B (numbers 48/36, panel labels 28, small text 24/20, fine print 16/14/12)
+for size in 48 36 28 24 20 16 14 12; do
   lv_font_conv --font assets/StyreneB-Regular.otf -r 0x20-0x7E \
     --size $size --format lvgl --bpp 4 --no-compress \
     -o firmware/src/font_styrene_${size}.c --lv-include "lvgl.h"
