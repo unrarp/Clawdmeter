@@ -1,6 +1,7 @@
 #!/bin/bash
 # Claude Usage Tracker Daemon (BLE)
-# Reads Claude Code OAuth token, polls the OAuth usage endpoint, sends to ESP32 over BLE GATT.
+# Reads Claude Code OAuth token + Codex token, polls the OAuth usage endpoints,
+# sends a combined JSON payload to the ESP32 over BLE GATT.
 # Auto-connects and reconnects to the Claude Controller BLE device.
 # Dependencies: curl, awk, python3, bluetoothctl
 
@@ -16,6 +17,10 @@ SAVED_MAC_FILE="$HOME/.config/claude-usage-monitor/ble-address"
 REFRESH_FLAG="/tmp/claude-usage-refresh-$$"
 DBUS_DEST="org.bluez"
 NOTIFY_PID=""
+
+# Per-provider last-good cache files (written by the inline Python, read next cycle)
+CLAUDE_CACHE="/tmp/claude-usage-claude-last-$$"
+CODEX_CACHE="/tmp/claude-usage-codex-last-$$"
 
 log() {
     echo "[$(date '+%H:%M:%S')] $1"
@@ -193,74 +198,245 @@ write_gatt() {
 }
 
 poll() {
-    local token
-    token=$(read_token) || { log "Error: could not read token"; return 1; }
+    # ---- Presence detection (re-checked every cycle) -------------------------
+    # sp: Claude present iff creds file exists.
+    # cp: Codex present iff auth.json exists.
+    local sp=false cp=false
+    [ -f "$HOME/.claude/.credentials.json" ] && sp=true
+    [ -f "$HOME/.codex/auth.json" ] && cp=true
 
-    # Pull live usage straight from the OAuth usage endpoint. Unlike the old
-    # /v1/messages header-scrape, this is a purpose-built JSON endpoint: no
-    # throwaway inference call, utilization is already a percentage (0-100),
-    # and resets come back as ISO-8601 timestamps. It IS rate-limited, though
-    # (429/529 above ~1 req/min) — hence POLL_INTERVAL above.
-    local resp http body
-    resp=$(curl -s -w $'\n%{http_code}' \
-        "https://api.anthropic.com/api/oauth/usage" \
-        -H "Authorization: Bearer $token" \
-        -H "anthropic-beta: oauth-2025-04-20" \
-        -H "User-Agent: claude-code/2.1.5" \
-        2>/dev/null) || { log "Error: API call failed"; return 1; }
-    http=$(printf '%s' "$resp" | tail -n1)
-    body=$(printf '%s' "$resp" | sed '$d')
+    # Drop a provider's last-good cache the moment it goes absent, so re-adding
+    # an account starts at "Connecting..." rather than resurrecting the previous
+    # account's numbers as stale.
+    [ "$sp" = "true" ] || rm -f "$CLAUDE_CACHE"
+    [ "$cp" = "true" ] || rm -f "$CODEX_CACHE"
 
-    if [ "$http" != "200" ]; then
-        log "Usage API HTTP $http: $(printf '%s' "$body" | tr -d '\n' | head -c 160)"
-        return 1
+    # ---- Claude poll (only when present) -------------------------------------
+    local claude_http="" claude_body=""
+    if [ "$sp" = "true" ]; then
+        local token
+        token=$(read_token 2>/dev/null)
+        if [ -n "$token" ]; then
+            local claude_resp
+            claude_resp=$(curl -s -w $'\n%{http_code}' \
+                "https://api.anthropic.com/api/oauth/usage" \
+                -H "Authorization: Bearer $token" \
+                -H "anthropic-beta: oauth-2025-04-20" \
+                -H "User-Agent: claude-code/2.1.5" \
+                2>/dev/null)
+            claude_http=$(printf '%s' "$claude_resp" | tail -n1)
+            claude_body=$(printf '%s' "$claude_resp" | sed '$d')
+        else
+            log "Claude: could not read token"
+            claude_http="0"
+            claude_body=""
+        fi
     fi
 
-    # Map the endpoint JSON to the compact wire format the firmware parses:
-    # five_hour -> session (s/sr), seven_day -> weekly (w/wr). Utilization is
-    # already 0-100, so no *100. resets_at (ISO-8601) -> minutes-from-now.
+    # ---- Codex poll (only when present) --------------------------------------
+    local codex_http="" codex_body=""
+    if [ "$cp" = "true" ]; then
+        local codex_access_token codex_account_id codex_creds
+        # Read both creds in ONE python invocation — two separate reads could
+        # straddle a Codex CLI token refresh and pair a new access_token with an
+        # old account_id.
+        codex_creds=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$HOME/.codex/auth.json'))
+    print(d['tokens']['access_token'] + '\t' + d['tokens']['account_id'])
+except Exception:
+    sys.exit(1)
+" 2>/dev/null)
+        IFS=$'\t' read -r codex_access_token codex_account_id <<<"$codex_creds"
+        if [ -n "$codex_access_token" ] && [ -n "$codex_account_id" ]; then
+            local codex_resp
+            codex_resp=$(curl -s -w $'\n%{http_code}' \
+                "https://chatgpt.com/backend-api/wham/usage" \
+                -H "Authorization: Bearer $codex_access_token" \
+                -H "ChatGPT-Account-Id: $codex_account_id" \
+                -H "User-Agent: claude-code/2.1.5" \
+                2>/dev/null)
+            codex_http=$(printf '%s' "$codex_resp" | tail -n1)
+            codex_body=$(printf '%s' "$codex_resp" | sed '$d')
+        else
+            log "Codex: could not read auth.json tokens"
+            codex_http="0"
+            codex_body=""
+        fi
+    fi
+
+    # ---- Merge both providers into a combined wire payload -------------------
+    # The inline Python:
+    #   - reads per-provider HTTP codes, bodies, and presence flags
+    #   - applies the last-good cache (reads/writes the tmp files)
+    #   - emits the combined compact JSON on stdout
+    #   - exits 0 if >=1 present provider succeeded (or neither present), 1 if all-present failed
     local payload
-    payload=$(printf '%s' "$body" | python3 -c '
-import sys, json
-from datetime import datetime, timezone
+    payload=$(SP="$sp" CP="$cp" \
+        CLAUDE_HTTP="$claude_http" CLAUDE_BODY="$claude_body" \
+        CODEX_HTTP="$codex_http"   CODEX_BODY="$codex_body" \
+        CLAUDE_CACHE="$CLAUDE_CACHE" CODEX_CACHE="$CODEX_CACHE" \
+        python3 -c '
+import sys, json, os
 
-def mins(iso):
-    if not iso:
-        return -1
+sp = (os.environ.get("SP") == "true")
+cp = (os.environ.get("CP") == "true")
+claude_http = os.environ.get("CLAUDE_HTTP", "")
+claude_body = os.environ.get("CLAUDE_BODY", "")
+codex_http  = os.environ.get("CODEX_HTTP", "")
+codex_body  = os.environ.get("CODEX_BODY", "")
+claude_cache_file = os.environ.get("CLAUDE_CACHE", "")
+codex_cache_file  = os.environ.get("CODEX_CACHE", "")
+
+def load_cache(path):
     try:
-        dt = datetime.fromisoformat(iso)
-        if dt.tzinfo is None:               # naive timestamp -> assume UTC
-            dt = dt.replace(tzinfo=timezone.utc)
-        return max(0, round((dt - datetime.now(timezone.utc)).total_seconds() / 60))
-    except Exception:                       # unparseable / arithmetic error -> unknown
+        return json.loads(open(path).read())
+    except Exception:
+        return None
+
+def save_cache(path, obj):
+    try:
+        open(path, "w").write(json.dumps(obj))
+    except Exception:
+        pass
+
+def mins_from_seconds(s):
+    try:
+        return max(0, int(s) // 60)
+    except Exception:
         return -1
 
-d = json.load(sys.stdin)
-fh = d.get("five_hour") or {}
-sd = d.get("seven_day") or {}
-# Utilization is already 0-100; round once and derive st from the rounded value
-# so "s":100 can never pair with "st":"allowed" (raw 99.6 rounds up to 100).
-s = round(fh.get("utilization") or 0)
-w = round(sd.get("utilization") or 0)
-print(json.dumps({
-    "s": s,
-    "sr": mins(fh.get("resets_at")),
-    "w": w,
-    "wr": mins(sd.get("resets_at")),
-    "st": "limited" if s >= 100 else "allowed",
-    "ok": True,
-}, separators=(",", ":")))
-') || { log "Error: failed to parse usage JSON"; return 1; }
+# ---- Parse Claude response ---------------------------------------------------
+claude_ok = False
+claude_fresh = None
+if sp and claude_http == "200" and claude_body:
+    try:
+        from datetime import datetime, timezone
+        d = json.loads(claude_body)
+        fh = d.get("five_hour") or {}
+        sd = d.get("seven_day") or {}
+        def iso_mins(iso):
+            if not iso:
+                return -1
+            try:
+                dt = datetime.fromisoformat(iso)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return max(0, round((dt - datetime.now(timezone.utc)).total_seconds() / 60))
+            except Exception:
+                return -1
+        sv = round(fh.get("utilization") or 0)
+        wv = round(sd.get("utilization") or 0)
+        claude_fresh = {
+            "s":  sv,
+            "sr": iso_mins(fh.get("resets_at")),
+            "w":  wv,
+            "wr": iso_mins(sd.get("resets_at")),
+            "st": "limited" if sv >= 100 else "allowed",
+        }
+        claude_ok = True
+    except Exception as e:
+        pass
 
-    [ -n "$payload" ] || { log "Error: empty payload after parse"; return 1; }
+# ---- Parse Codex response ---------------------------------------------------
+codex_ok = False
+codex_fresh = None
+if cp and codex_http == "200" and codex_body:
+    try:
+        d = json.loads(codex_body)
+        rl = d.get("rate_limit") or {}
+        pw = rl.get("primary_window") or {}
+        sw = rl.get("secondary_window") or {}
+        cs = round(pw.get("used_percent") or 0)
+        cw = round(sw.get("used_percent") or 0)
+        allowed  = rl.get("allowed", True)
+        lim_reachd = rl.get("limit_reached", False)
+        cst = "limited" if (not allowed or lim_reachd or cs >= 100) else "allowed"
+        codex_fresh = {
+            "cs":  cs,
+            "csr": mins_from_seconds(pw.get("reset_after_seconds")),
+            "cw":  cw,
+            "cwr": mins_from_seconds(sw.get("reset_after_seconds")),
+            "cst": cst,
+        }
+        codex_ok = True
+    except Exception as e:
+        pass
+
+# ---- Update last-good caches ------------------------------------------------
+if claude_ok and claude_fresh is not None:
+    save_cache(claude_cache_file, claude_fresh)
+if codex_ok and codex_fresh is not None:
+    save_cache(codex_cache_file, codex_fresh)
+
+# ---- Resolve effective values per provider ----------------------------------
+claude_cache = load_cache(claude_cache_file) if sp else None
+codex_cache  = load_cache(codex_cache_file)  if cp else None
+
+# Claude effective values
+if sp:
+    if claude_ok and claude_fresh:
+        c_vals = claude_fresh
+    elif claude_cache:
+        c_vals = claude_cache          # last-good, ok=False signals stale
+    else:
+        c_vals = {"s": -1, "sr": -1, "w": -1, "wr": -1, "st": "allowed"}
+else:
+    c_vals = {"s": -1, "sr": -1, "w": -1, "wr": -1, "st": "allowed"}
+
+# Codex effective values
+if cp:
+    if codex_ok and codex_fresh:
+        x_vals = codex_fresh
+    elif codex_cache:
+        x_vals = codex_cache
+    else:
+        x_vals = {"cs": -1, "csr": -1, "cw": -1, "cwr": -1, "cst": "unknown"}
+else:
+    x_vals = {"cs": -1, "csr": -1, "cw": -1, "cwr": -1, "cst": "unknown"}
+
+# ---- Build and emit combined payload ----------------------------------------
+payload = {
+    "s":   c_vals["s"],
+    "sr":  c_vals["sr"],
+    "w":   c_vals["w"],
+    "wr":  c_vals["wr"],
+    "st":  c_vals["st"],
+    "ok":  claude_ok,
+    "sp":  sp,
+    "cp":  cp,
+    "cs":  x_vals["cs"],
+    "csr": x_vals["csr"],
+    "cw":  x_vals["cw"],
+    "cwr": x_vals["cwr"],
+    "cst": x_vals["cst"],
+    "cok": codex_ok,
+}
+print(json.dumps(payload, separators=(",", ":")))
+
+# ---- Exit code: 0 = success-or-none-present; 1 = all-present failed ---------
+n_present  = (1 if sp else 0) + (1 if cp else 0)
+n_ok       = (1 if claude_ok else 0) + (1 if codex_ok else 0)
+if n_present > 0 and n_ok == 0:
+    sys.exit(1)
+sys.exit(0)
+')
+    local py_exit=$?
+
+    [ -n "$payload" ] || { log "Error: empty payload after merge"; return 1; }
 
     log "Sending: $payload"
     write_gatt "$RX_CHAR_PATH" "$payload" || { log "Write failed"; return 1; }
-    return 0
+
+    # Return the Python exit code so the caller can distinguish
+    # "all-present-failed" (1) from "success-or-none-present" (0).
+    return $py_exit
 }
 
 cleanup() {
     stop_notify_subscriber
+    rm -f "$CLAUDE_CACHE" "$CODEX_CACHE"
     log "Daemon stopped"
     exit 0
 }
@@ -306,10 +482,11 @@ while true; do
 
     start_notify_subscriber
 
-    # Poll loop: tick every $TICK seconds. Poll Anthropic when the interval has
-    # elapsed OR when the ESP requested a refresh. On a failed/throttled poll,
-    # back off by POLL_FAIL_BACKOFF (not the full interval and not every tick)
-    # so we recover quickly without storming the rate-limited usage endpoint.
+    # Poll loop: tick every $TICK seconds. Poll both providers when the interval
+    # has elapsed OR when the ESP requested a refresh. Always write a combined
+    # snapshot. On success-or-none-present, advance LAST_POLL normally; if every
+    # present provider failed, take POLL_FAIL_BACKOFF instead of retrying every
+    # tick (avoids storming the rate-limited usage endpoints).
     LAST_POLL=0
     while is_connected; do
         NOW=$(date +%s)
@@ -319,8 +496,10 @@ while true; do
                 rm -f "$REFRESH_FLAG"
             fi
             if poll; then
+                # 0 = at least one present provider succeeded, or none present
                 LAST_POLL=$NOW
             else
+                # 1 = all present providers failed — back off
                 LAST_POLL=$(( NOW - POLL_INTERVAL + POLL_FAIL_BACKOFF ))
             fi
         fi

@@ -13,7 +13,7 @@ Two reference ports today:
 
 The shared code calls a small HAL (`firmware/src/hal/`) that each board implements: display, touch, input, power, IMU. Optional features are guarded by `BoardCaps` (runtime) and `BOARD_HAS_*` (compile-time) rather than `#ifdef BOARD_*`.
 
-Connects to a host daemon over BLE; daemon polls Anthropic API for usage data. This file is for future Claude Code sessions to bootstrap quickly. Read this first.
+Connects to a host daemon over BLE; the daemon polls the Anthropic (Claude) and OpenAI (Codex) usage APIs and pushes a combined snapshot. This file is for future Claude Code sessions to bootstrap quickly. Read this first.
 
 ## Hardware (critical pins)
 
@@ -49,12 +49,13 @@ firmware/src/
     waveshare_amoled_18/    — SH8601 + FT3168 + AXP + XCA9554 (PWR via EXIO4), no rotation
     template/               — copy this to bootstrap a new port
   main.cpp                  — setup() + loop(): HAL calls only, zero #ifdef BOARD_*
-  ui.{h,cpp}                — 3-screen UI (splash, usage, bluetooth). compute_layout() picks fonts/positions from board_caps() (responsive — current breakpoint: H >= 460 → large, else compact)
+  ui.{h,cpp}                — 4-screen UI (splash, Claude, Codex, bluetooth). The two usage screens share init_provider_screen()/ui_update_provider() over a ProviderWidgets struct. compute_layout() picks fonts/positions from board_caps() (responsive — current breakpoint: H >= 460 → large, else compact)
   splash.{h,cpp}            — 20×20 pixel-art engine. CELL = min(W,H)/20, centered.
   ble.{h,cpp}               — NimBLE peripheral: custom data service + HID keyboard
-  data.h                    — UsageData struct
+  data.h                    — UsageData struct (flat; Claude + Codex fields, per-provider present/ok flags)
   icons.h                   — icon arrays. Battery (5×) are RGB565A8 with alpha; rest are raw RGB565.
-  logo.h                    — 80×80 RGB565 logo
+  logo_claude.h             — 80×80 RGB565A8 Claude mark
+  logo_openai.h             — 80×80 RGB565A8 OpenAI Codex mark (lobe-icons codex-color.svg, tile stripped; gradient preserved)
   font_*.c                  — pre-compiled LVGL 9 bitmap fonts (Tiempos 56/34, Styrene 48/36/28/24/20/16/14/12, Mono 32/18)
   splash_animations.h       — generated, do not hand-edit
 docs/porting/               — adding-a-board.md, hal-contract.md, capability-flags.md
@@ -83,7 +84,7 @@ Device path differs by OS: `/dev/cu.usbmodem*` on macOS, `/dev/ttyACM0` on Linux
 
 The firmware ships a `screenshot` serial command that dumps the LVGL framebuffer. `./screenshot.sh out.png [port]` captures a PNG sized to the active display (480×480 or 368×448). **Use this on every UI iteration** — Read the PNG with the Read tool, verify the change visually, iterate. Script auto-picks the macOS/Linux default port and falls back to pio's bundled Python if pyserial isn't on the system Python.
 
-The boot screen is `SCREEN_SPLASH` and only advances on a physical button press, so a fresh flash will sit on the splash. To screenshot the screen you're actually editing without asking the user to press a button, **temporarily change the default boot screen** in `main.cpp` (search for `ui_show_screen(SCREEN_SPLASH);`) to `SCREEN_USAGE` / `SCREEN_CONTROLLER` / `SCREEN_BLUETOOTH`, do your iteration, then revert before committing.
+The boot screen is `SCREEN_SPLASH` and only advances on a physical button press, so a fresh flash will sit on the splash. To screenshot the screen you're actually editing without asking the user to press a button, **temporarily change the default boot screen** in `main.cpp` (search for `ui_show_screen(SCREEN_SPLASH);`) to `SCREEN_USAGE` / `SCREEN_CODEX` / `SCREEN_BLUETOOTH`, do your iteration, then revert before committing. (`screenshot.sh` shells out to `ffmpeg` for the raw→PNG step — if it's not installed the capture succeeds but conversion fails; decode the raw RGB565LE yourself or install ffmpeg.)
 
 ## Critical gotchas
 
@@ -120,6 +121,7 @@ See `~/.claude/projects/.../memory/` files for persistent context (user is an em
 
 ## Recent session highlights
 
+- **Codex provider (2026-06-02).** Added an OpenAI Codex usage screen alongside Claude — fixed cycle Splash→Claude→Codex→Bluetooth, parameterized over a `ProviderWidgets` struct (`init_provider_screen`/`ui_update_provider`), OpenAI mark (`logo_openai.h`) + ChatGPT-green accent (`THEME_ACCENT_CODEX`), Codex-authentic "Working/Thinking" spinner words. The daemon polls a second provider (`wham/usage`) with per-provider presence + last-good caching; the wire grew to 14 keys.
 - **Compact-layout polish (2026-06-02).** Retuned the compact (368×448) breakpoint in `compute_layout()`, which was over-shrunk: panels and fonts now stay close to the large layout (the 1.8" is only ~7% shorter). Moved the remaining hardcoded Usage fonts + Bluetooth offsets/fonts into the `Layout` struct, added `font_styrene_36` for the `%` headline, and added `row_center_y()` to vertically center the title + battery against the logo (driven by `L.logo_y`). Both breakpoints now share `content_y`/`usage_panel_gap`/label fonts (set once before the `if/else`).
 - **Device-abstraction refactor (2026-05-18).** All board-conditional code moved out of shared files into `boards/<name>/` and behind a HAL in `hal/`. ~30 `#ifdef BOARD_*` blocks went to zero. UI is responsive via `compute_layout()` driven by `board_caps()`. New ports add a folder + a PlatformIO env — no shared file edits.
 - Added second board port: Waveshare AMOLED-1.8 (368×448 portrait, SH8601, FT3168, XCA9554 IO expander).
@@ -132,9 +134,13 @@ See `~/.claude/projects/.../memory/` files for persistent context (user is an em
 
 ## Daemon / host side
 
-Bash daemon (`daemon/claude-usage-daemon.sh`) reads OAuth token, polls Anthropic for usage, sends JSON over BLE GATT. Run with `systemctl --user start claude-usage-daemon`. The unit file's `ExecStart` is the absolute path to the script — repoint it when switching between the worktree and the main checkout.
+Bash daemon (`daemon/claude-usage-daemon.sh`, Linux) and its macOS port (`daemon/claude_usage_daemon.py`) read each provider's creds, poll **two** providers — Anthropic (Claude) and OpenAI (Codex) — and send a combined JSON snapshot over BLE GATT. Run with `systemctl --user start claude-usage-daemon`. The unit file's `ExecStart` is the absolute path to the script — repoint it when switching between the worktree and the main checkout. **Foot-gun:** the daemon is a long-running `while` loop, so editing the script changes nothing until `systemctl --user restart` — the old logic stays resident in memory (this is how you get a stale daemon silently emitting the old wire format).
 
-**Usage source:** polls `GET https://api.anthropic.com/api/oauth/usage` (Bearer = subscription OAuth token, `anthropic-beta: oauth-2025-04-20`; needs `user:profile` scope). Returns `{five_hour,seven_day,...}` with `utilization` already a **0-100 percentage** (no ×100) and `resets_at` as ISO-8601. `five_hour`→session (`s`/`sr`), `seven_day`→weekly (`w`/`wr`); `st` derived (`limited` if session util ≥ 100). **Foot-gun:** this endpoint is rate-limited — empirically 429/529 above ~1 req/min — hence the 300s interval below; don't lower it. (Earlier versions scraped rate-limit *headers* off a throwaway 1-token `/v1/messages` POST; that had generous limits but burned a token + spoofed the client. The wire format to the firmware is unchanged.)
+**Usage source:** polls `GET https://api.anthropic.com/api/oauth/usage` (Bearer = subscription OAuth token, `anthropic-beta: oauth-2025-04-20`; needs `user:profile` scope). Returns `{five_hour,seven_day,...}` with `utilization` already a **0-100 percentage** (no ×100) and `resets_at` as ISO-8601. `five_hour`→session (`s`/`sr`), `seven_day`→weekly (`w`/`wr`); `st` derived (`limited` if session util ≥ 100). **Foot-gun:** this endpoint is rate-limited — empirically 429/529 above ~1 req/min — hence the 300s interval below; don't lower it. (Earlier versions scraped rate-limit *headers* off a throwaway 1-token `/v1/messages` POST; that had generous limits but burned a token + spoofed the client.)
+
+**Codex usage source:** polls `GET https://chatgpt.com/backend-api/wham/usage` with `Authorization: Bearer <tokens.access_token>` + `ChatGPT-Account-Id: <tokens.account_id>`, both from `~/.codex/auth.json` (NOT the Claude creds file). `rate_limit.primary_window`→session (`cs`/`csr`), `secondary_window`→weekly (`cw`/`cwr`); `used_percent` is already 0–100; `reset_after_seconds // 60`→minutes (no ISO math). `cst` = `limited` if `!allowed`/`limit_reached`/`cs ≥ 100`. Reuses the 300s interval (its own rate-limit tolerance is unverified). See `.claude/rules/daemon.md`.
+
+**Two-provider model & wire format:** each provider is independently optional. Presence (`sp`/`cp`) = its creds file exists, re-checked every cycle (drives the device's "No account" page, not page-hiding). Every cycle the daemon polls each present provider, holds a per-provider last-good cache, and always writes a **full 14-key snapshot** — `s/sr/w/wr/st/ok` (Claude) + `sp/cp` (presence) + `cs/csr/cw/cwr/cst/cok` (Codex) — so one provider's failure never blanks the other's panel: a present-but-failing provider keeps its last-good numbers with `ok:false` (device dims them); a never-succeeded provider sends `-1` sentinels (device shows "Connecting…"). The cycle counts as success (advances the poll timer) if any present provider polled OK, else it takes `POLL_FAIL_BACKOFF`. In the bash daemon the inline `python3 -c` merge receives the two bodies/HTTP codes/presence via **env vars that must PREFIX `python3`** — placing them after the `-c '…'` arg silently makes `os.environ` empty (every field reads absent).
 
 **Discovery & resilience:**
 

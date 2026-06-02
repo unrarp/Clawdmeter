@@ -104,12 +104,22 @@ static bool parse_json(const char* json, UsageData* out) {
         return false;
     }
 
-    out->session_pct = doc["s"] | 0.0f;
+    out->session_pct = doc["s"] | -1.0f;
     out->session_reset_mins = doc["sr"] | -1;
-    out->weekly_pct = doc["w"] | 0.0f;
+    out->weekly_pct = doc["w"] | -1.0f;
     out->weekly_reset_mins = doc["wr"] | -1;
     strlcpy(out->status, doc["st"] | "unknown", sizeof(out->status));
     out->ok = doc["ok"] | false;
+
+    out->claude_present            = doc["sp"]  | true;   // backward-compat: old payloads => Claude shown
+    out->codex_present             = doc["cp"]  | false;  // old payloads => Codex absent
+    out->codex_session_pct         = doc["cs"]  | -1.0f;  // -1 = "no data yet" sentinel
+    out->codex_session_reset_mins  = doc["csr"] | -1;
+    out->codex_weekly_pct          = doc["cw"]  | -1.0f;
+    out->codex_weekly_reset_mins   = doc["cwr"] | -1;
+    strlcpy(out->codex_status, doc["cst"] | "unknown", sizeof(out->codex_status));
+    out->codex_ok                  = doc["cok"] | false;
+
     out->valid = true;
     return true;
 }
@@ -226,6 +236,13 @@ void setup() {
 
 static ble_state_t last_ble_state = BLE_STATE_INIT;
 
+static float max_present_session_pct(const UsageData& u) {
+    float m = -1.0f;
+    if (u.claude_present && u.session_pct >= 0)       m = (u.session_pct > m) ? u.session_pct : m;
+    if (u.codex_present  && u.codex_session_pct >= 0) m = (u.codex_session_pct > m) ? u.codex_session_pct : m;
+    return m < 0 ? 0.0f : m;   // idle default when no present provider has data
+}
+
 void loop() {
     idle_tick();
     lv_timer_handler();
@@ -307,11 +324,11 @@ void loop() {
     if (ble_has_data()) {
         if (parse_json(ble_get_data(), &usage)) {
             int g_before = usage_rate_group();
-            usage_rate_sample(usage.session_pct);
+            usage_rate_sample(max_present_session_pct(usage));
             int g_after = usage_rate_group();
             if (g_after != g_before) {
                 Serial.printf("usage rate: group %d -> %d (s=%.2f%%)\n",
-                    g_before, g_after, usage.session_pct);
+                    g_before, g_after, max_present_session_pct(usage));
                 if (splash_is_active()) splash_pick_for_current_rate();
             }
             ui_update(&usage);

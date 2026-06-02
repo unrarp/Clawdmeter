@@ -1,7 +1,7 @@
 ---
 date: 2026-06-02
 module: daemon, firmware
-status: approved, not started
+status: in progress
 tags: [codex, openai, usage, wham-usage, ble-wire, ui, animations]
 ---
 
@@ -15,29 +15,25 @@ Usage screen (5-hour + weekly windows), fed by the same host daemon over the
 same BLE channel.
 
 **Single-account users are first-class.** Many people have only one of the two
-accounts. A provider the user doesn't have (no creds file) must have its page
-**omitted from the screen cycle entirely** — not shown as an empty/"unavailable"
-panel. This is symmetric: a Codex-only user sees no Claude page; a Claude-only
-user sees no Codex page (today's behavior). "Not used" (creds absent → hide page)
-is distinct from "temporarily failing" (present but mid-401/429/offline → keep
-page, show last-good). See §B.6 (presence detection) and §D.2 (dynamic cycle).
+accounts. The screen cycle is fixed and both provider pages always exist; a
+provider the user doesn't have (no creds file) shows a clear **"No account"**
+panel rather than blank numbers. This is distinct from "temporarily failing"
+(present but mid-401/429/offline → keep the last-good numbers, dimmed). See §B.6
+(presence) and §D.4 (within-page states).
 
 ## Decisions locked (user, 2026-06-02)
 
 - **Separate screen** per provider (not a combined 4-panel or per-window-compare
-  layout). Cycle becomes `Splash → Claude → Codex → Bluetooth`, with provider
-  pages hidden when that provider is absent (§D.2).
-- **OpenAI-branded** Codex screen: OpenAI logo + accent **ChatGPT green
+  layout). The cycle is the fixed `Splash → Claude → Codex → Bluetooth`; both
+  provider pages are always present (§D.2).
+- **OpenAI-branded** Codex screen: the OpenAI Codex mark + accent **ChatGPT green
   `#10A37F`** (`THEME_ACCENT_CODEX`).
 - **Animations v1 = spinner only.** Pixel-pet creatures deferred (§F).
-- **Presence = creds file exists**, page shown immediately ("Connecting…" until
-  first data) — §B.6.
-- **Stale data**: keep last-good numbers + a subtle stale hint after several
-  consecutive failures (§D.4).
-- **Splash creature driver**: max session % across *present* providers (§D.6).
-- **Rebrand to `clawdmeter`** — advertised identity only (BLE name, manufacturer
-  string, daemons' connect-by-name). Config paths / systemd unit / splash art
-  unchanged (§H).
+- **Presence = creds file exists.** Drives the "No account" message on a page,
+  not whether the page exists (§B.6, §D.4).
+- **Stale data**: keep the last-good numbers and dim them once the latest poll
+  for that provider fails (§D.4).
+- **Splash creature driver**: max session % across present providers (§D.6).
 
 ## A. Usage API — verified working
 
@@ -93,69 +89,67 @@ hold last-good state so one provider's failure never blanks the other's panel.
   `Authorization: Bearer …` + `ChatGPT-Account-Id: …`.
 - Map `used_percent` → 0–100 directly; `reset_after_seconds // 60` → minutes
   (no ISO helper for Codex).
-- **Each provider is optional.** The daemon must run with *either* provider
-  alone (today it aborts a poll if the Claude token is unreadable — that becomes
-  per-provider: an unreadable/absent provider is simply marked not-present, the
-  other still polls and writes). If neither is present the daemon still runs the
-  BLE/HID side; it just emits both providers absent.
+- **Each provider is optional.** The daemon runs with *either* provider alone, or
+  neither: an unreadable/absent provider is marked not-present and the other still
+  polls and writes. If neither is present the daemon still runs the BLE/HID side
+  and emits both providers absent.
 - **Independent poll + last-good cache:** keep an in-memory per-provider result.
-  Each cycle, attempt every *present* provider; update only the one(s) that
+  Each cycle, attempt every present provider; update only the one(s) that
   succeeded; always emit a combined payload built from the cached values. A
   present provider that succeeded before but failed this cycle keeps its
-  last-good values (the device shows the last known numbers, not 0%). A present
-  provider that has **never** succeeded is emitted present-but-not-ok (page shown
-  as "Connecting…").
+  last-good values (`…ok:false`, so the device dims them). A present provider that
+  has **never** succeeded is emitted with `-1` sentinels and `…ok:false` (the
+  device shows "Connecting…").
 - Keep `POLL_INTERVAL=300`.
 
-### B.6 Presence detection (drives page hide/show)
+### B.6 Presence detection
 
 - A provider is **present** iff its creds file exists:
   `~/.claude/.credentials.json` (Claude) / `~/.codex/auth.json` (Codex). The
   daemon sets the presence flags (`sp` / `cp`, §C) from this check each cycle.
-  **Decided:** creds-file existence is the presence signal — the page appears as
-  soon as the file is there and shows "Connecting…" until the first successful
-  poll (no "require ≥1 successful poll" gate).
 - Presence is **independent of poll success** — a present provider that's
-  throttled/expired/offline stays present (its page stays in the cycle, showing
-  last-good or "Connecting…"). Only an absent creds file hides the page.
+  throttled/expired/offline stays present; only an absent creds file clears the
+  flag.
 - Re-checked each cycle so adding/removing an account is picked up without a
-  daemon restart (the firmware reconciles the visible cycle on each payload, §D.2).
+  daemon restart.
 
 ### B.2 Bash daemon (`daemon/claude-usage-daemon.sh`)
 
-- `poll()` (currently builds the whole payload from one inline `python3` block,
-  ~lines 223–253) gains a second `curl` and the inline Python merges **two**
-  JSON inputs into the combined wire dict. Pass both provider bodies (and a
-  per-provider success flag) into the Python block; have it emit the cached/
-  merged result. Last-good caching across calls lives in the bash loop (e.g.
-  write each provider's last-good JSON to a tmp file the Python block reads).
+- `poll()` gains a second `curl` for Codex; the inline `python3` block merges
+  **two** JSON inputs into the combined wire dict. Both provider bodies, their
+  per-provider HTTP codes, and the last-good tmp-file paths are passed into the
+  Python block, which reads/rewrites the per-provider last-good files and prints
+  the merged result.
 
 ### B.3 macOS Python daemon (`daemon/claude_usage_daemon.py`)
 
-- **No "merge block" exists here** — the structure is `poll_api(token) -> dict`
-  (one `API_URL`, a `reset_minutes` helper) feeding `Session.write_payload()`.
-  Concrete edits: add a `CODEX_API_URL` + a Codex token/account reader; turn
-  `poll_api` into two independent fetches (or a second `poll_codex()`); merge
-  the two dicts (with module-level last-good caches) before `write_payload`.
-  This is a real refactor, not a line-for-line port.
+- Structure is `poll_api(token) -> dict` feeding `Session.write_payload()`. Add a
+  `CODEX_API_URL` + a Codex token/account reader; split `poll_api` into
+  `poll_claude()` / `poll_codex()`; merge the two dicts (with module-level
+  last-good caches) before `write_payload`.
 
 ### B.4 Unavailable / missing creds
 
-- Absent `~/.codex/auth.json` → emit `cok:false` and placeholder Codex fields.
-  The firmware renders this as an explicit unavailable state (§D), not 0%.
+- Absent `~/.codex/auth.json` → `cp:false` and `-1` Codex fields. The firmware
+  renders this as the "No account" panel (§D.4), not `0%`.
 
-### B.5 Auth failure handling (401 vs 429)
+### B.5 Auth failure & backoff
 
-- **429/5xx** (throttle): existing `POLL_FAIL_BACKOFF=60` path, per provider.
-- **401** (expired token, CLI hasn't refreshed): emit `cok:false` + take the
-  `POLL_FAIL_BACKOFF` path — do **not** retry every `TICK` (5s), or an expired
-  token would hammer the auth endpoint. (Self-refresh remains the deferred
-  fallback from §A.)
+- **429/5xx** (throttle) and **401** (expired token, CLI hasn't refreshed): mark
+  that provider's `ok`/`cok` false this cycle and take the `POLL_FAIL_BACKOFF=60`
+  path — do **not** retry every `TICK` (5s), or an expired token would hammer the
+  auth endpoint. (Self-refresh remains the deferred fallback from §A.)
+- **Single-timer reconciliation:** the loop has one `LAST_POLL`/backoff timer but
+  two providers. It builds + writes a combined snapshot every poll cycle from the
+  per-provider last-good cache, and treats the cycle as a **success** (advance the
+  timer) if **any present provider** polled OK, or if no provider is present;
+  it takes the `POLL_FAIL_BACKOFF` path only when **every present provider
+  failed**. The macOS daemon mirrors this with its `last_poll` timer.
 
 ## C. Wire format (backward-compatible, full-snapshot)
 
-Current `{"s","sr","w","wr","st","ok"}` → add Codex keys **and per-provider
-presence flags**:
+Current `{"s","sr","w","wr","st","ok"}` → add Codex keys and per-provider presence
+flags:
 
 | key | meaning |
 |---|---|
@@ -168,26 +162,33 @@ presence flags**:
 | `cst` | Codex status (`allowed`/`limited`) |
 | `cok` | Codex latest poll succeeded |
 
-`sp`/`cp` decide **page hide/show**; `ok`/`cok` decide fresh-vs-last-good *within*
-a shown page. **Backward-compatible defaults** (firmware, §D.1): missing `sp` →
-`true`, missing `cp` → `false`. So an old daemon payload (no presence keys, no
-Codex keys) behaves exactly as today: Claude page shown, Codex page absent.
+`sp`/`cp` select the "No account" message for an absent provider; `ok`/`cok`
+decide fresh-vs-dimmed within a present page. **Backward-compatible defaults**
+(firmware, §D.1): missing `sp` → `true`, missing `cp` → `false`, missing
+`cs/csr/cw/cwr` → `-1`, missing `cst` → `"unknown"`. So an old daemon payload (no
+presence keys, no Codex keys) behaves exactly as today: Claude page populated,
+Codex page shows "No account".
 
-Payload grows ~55 → ~115 bytes. Existing keys untouched.
+**`-1` is the "no data yet" sentinel** for both providers' pct/reset fields: a
+present provider that has never polled OK is sent with `-1`s (and `…ok:false`).
+The device renders `pct < 0` as the "Connecting…" state (§D.4), distinct from a
+genuine `0%`. The daemon applies this to Claude too (`s = -1` when
+present-but-never-OK), giving the Claude page the same "Connecting…" state.
 
-**Transport reality (corrected):** both daemons write with **Write-Without-
-Response** (bash D-Bus `WriteValue`, macOS Bleak `write_gatt_char(..., response
-=False)`); the RX characteristic is `WRITE | WRITE_NR`. There is **no** long-
-write / prepared-write reassembly on this path — a write is a single ATT PDU
-capped at `MTU − 3`. It works today only because the negotiated MTU (Linux ~517,
-macOS ~185) already exceeds the ~55-byte payload, and `ble_init()` never calls
-`setMTU` (relies on the peer-negotiated value). 110 bytes is under both, so it's
-low-risk — but **must be validated**, not assumed:
+Payload grows ~55 → ~142 bytes. Existing keys untouched.
 
-- **Validation step (do before firmware UI work):** extend
-  `daemon/test_macos_connect.py` (currently writes the old 6-key payload) to send
-  a full ~110-byte two-provider payload and confirm the device parses it without
-  truncation. Add the same as a one-off check on Linux.
+**Transport reality:** both daemons write with **Write-Without-Response** (bash
+D-Bus `WriteValue`, macOS Bleak `write_gatt_char(..., response=False)`); the RX
+characteristic is `WRITE | WRITE_NR`. There is **no** long-write / prepared-write
+reassembly on this path — a write is a single ATT PDU capped at `MTU − 3`. It
+works today only because the negotiated MTU (Linux ~517, macOS ~185) already
+exceeds the payload, and `ble_init()` never calls `setMTU` (relies on the
+peer-negotiated value). ~142 bytes is under both, so it's low-risk — but **must be
+validated**, not assumed:
+
+- **Validation step:** the full ~142-byte two-provider payload is sent via
+  `daemon/test_macos_connect.py` (and a one-off Linux write) and the device is
+  confirmed to parse it without truncation.
 - Optional insurance: `NimBLEDevice::setMTU(247)` in `ble_init()` before
   `start_advertising()`.
 
@@ -195,156 +196,123 @@ low-risk — but **must be validated**, not assumed:
 
 ### D.1 Data + parsing
 
-- **`data.h`** — extend `UsageData` with Codex fields, a per-provider poll-ok
-  flag, and **per-provider presence flags**: `codex_session_pct`,
-  `codex_session_reset_mins`, `codex_weekly_pct`, `codex_weekly_reset_mins`,
-  `codex_status[16]`, `codex_ok`, plus `claude_present`, `codex_present`. Keep the
-  struct **flat** (two providers don't justify a nested `Provider` struct).
-- **`main.cpp` `parse_json()`** (lines 107–113) — parse the new keys with the
-  same `| default` idiom; presence uses the backward-compat defaults from §C:
-  `claude_present = doc["sp"] | true`, `codex_present = doc["cp"] | false`,
-  `codex_ok = doc["cok"] | false`. The existing `valid` flag stays "any
-  successful parse".
+- **`data.h`** — `UsageData` carries Codex fields, a per-provider poll-ok flag,
+  and per-provider presence flags: `codex_session_pct`, `codex_session_reset_mins`,
+  `codex_weekly_pct`, `codex_weekly_reset_mins`, `codex_status[16]`, `codex_ok`,
+  plus `claude_present`, `codex_present`. The struct is **flat** (two providers
+  don't justify a nested `Provider` struct).
+- **`main.cpp` `parse_json()`** — parse the new keys with the same `| default`
+  idiom and the §C defaults: `claude_present = doc["sp"] | true`,
+  `codex_present = doc["cp"] | false`, `codex_ok = doc["cok"] | false`,
+  `cs/csr/cw/cwr | -1`. Claude `s`/`w` default to `-1.0f` (the no-data sentinel).
+  The existing `valid` flag stays "any successful parse".
 
-### D.2 Screen plumbing — presence-aware, three hardcoded call sites (the enum count does NOT auto-wire these)
+### D.2 Screen plumbing — static cycle
 
-The cycle is **dynamic**: a provider page is in the cycle only when that provider
-is present. `SCREEN_SPLASH` and `SCREEN_BLUETOOTH` are always present, so the
-worst case (no provider) still cycles Splash + Bluetooth.
+The cycle is the fixed `Splash → Claude → Codex → Bluetooth`. Every provider
+always has a page; an absent provider renders a "No account" panel (§D.4).
 
-- **`ui.h`** — insert `SCREEN_CODEX` between `SCREEN_USAGE` and `SCREEN_BLUETOOTH`.
-- **`screen_enabled(screen)` helper** — `SPLASH`/`BLUETOOTH` always true;
-  `SCREEN_USAGE` ⇔ `claude_present`; `SCREEN_CODEX` ⇔ `codex_present`. Driven by
-  the latest parsed `UsageData`. Before the first payload, presence falls back to
-  the §C defaults (Claude shown, Codex hidden) so boot behavior is unchanged.
-- **`ui_cycle_screen()`** (584) — currently hardcodes `USAGE ↔ BLUETOOTH`; rewrite
-  to advance to the **next `screen_enabled` non-splash screen**, skipping disabled
-  provider pages.
-- **`ui_show_screen()`** (562) — add a `case SCREEN_CODEX:` (reveal container +
-  logo swap, §E). If asked to show a disabled screen, redirect to the next enabled
-  one.
-- **`ui_tick_anim()`** (521) — the spinner gate `current_screen != SCREEN_USAGE`
-  must also allow `SCREEN_CODEX`, writing to that screen's own spinner label.
-- **Reconcile on each payload** — when new data changes presence, recompute; if
-  the **currently shown** screen just became disabled (e.g. account removed), snap
-  to the next enabled screen. Likewise `prev_non_splash_screen` must never be left
-  pointing at a disabled screen.
+- **`ui.h`** — `SCREEN_CODEX` sits between `SCREEN_USAGE` and `SCREEN_BLUETOOTH`
+  (before `SCREEN_COUNT`).
+- **`ui_cycle_screen()`** — advances `USAGE → CODEX → BLUETOOTH → USAGE`.
+  `SCREEN_SPLASH` is reached only via click/toggle, as today.
+- **`ui_show_screen()`** — hides `codex_w.container` in the blanket-hide block and
+  reveals it for `SCREEN_CODEX`; swaps `logo_img`'s source to the OpenAI mark on
+  `SCREEN_CODEX`, the Claude mark otherwise (§E).
+- **`ui_tick_anim()`** — runs on `SCREEN_USAGE` and `SCREEN_CODEX`, writing the
+  spinner to the current screen's provider label (`claude_w.anim` / `codex_w.anim`).
 
-### D.3 Screen construction — parameterize, don't clone
+### D.3 Screen construction — parameterized over a provider struct
 
-`init_usage_screen()` is already factored over `make_usage_panel()`; the only
-per-provider differences are the title, the accent color, and which widget
-pointers receive the panels. **Refactor first, then add the second screen:**
+The usage screen is factored over a `ProviderWidgets` struct (container, title,
+the two bars, the pct/label/reset labels per window, the spinner label) with two
+instances `claude_w` / `codex_w`:
 
-- Replace the flat usage-screen widget globals with a small `ProviderWidgets`
-  struct (container, the two bars, the pct/label/reset labels per window, the
-  spinner label). Keep two instances: `claude_w`, `codex_w`.
-- Extract `init_provider_screen(scr, title, accent, ProviderWidgets* w)` doing
-  what `init_usage_screen` does today; call it twice in `ui_init()`.
-- Extract `ui_update_provider(const ProviderWidgets* w, session_pct,
-  session_reset, weekly_pct, weekly_reset, available)`; `ui_update()` calls it
-  once per provider. Reuse `format_reset_time()` and `pct_color()` verbatim.
-- **Rename the existing screen's title "Usage" → "Claude"** to match the stated
-  cycle (otherwise the UX reads `Usage → Codex → Bluetooth`).
+- `init_provider_screen(scr, title, accent, ProviderWidgets* w)` builds one
+  screen; `ui_init()` calls it twice — `("Claude", COL_ACCENT)` and
+  `("Codex", COL_ACCENT_CODEX)`.
+- `ui_update_provider(ProviderWidgets* w, session_pct, session_reset, weekly_pct,
+  weekly_reset, present, ok, absent_msg)` renders one provider (§D.4); `ui_update()`
+  calls it once per provider. `format_reset_time()` and `pct_color()` are reused.
+- The Claude screen's title is **"Claude"** (matching the cycle).
 
-### D.4 Within-page states (for a *present* provider only)
+### D.4 Within-page states — flat switch
 
-An absent provider has **no page** (§D.2), so there's no "unavailable panel" to
-render. For a present provider whose latest poll hasn't succeeded:
+Each page renders one of four states from a flat switch in `ui_update_provider`,
+gating the provider-level absent/connecting decision on the session pct and
+applying it to both windows. Every signal comes straight off the latest payload —
+no device-side counters or thresholds:
 
-- **Never succeeded** (present-but-not-ok, no cached data): dimmed `—%` + a
-  "Connecting…" reset line.
-- **Succeeded before, failing now** (last-good cached, §B): show the last-good
-  numbers, and after several consecutive failed polls add a **subtle stale hint**
-  (e.g. dim the reset line / a small stale marker) so old data is distinguishable
-  from fresh. Do not drop to `0% / ---`. The failure threshold for the hint is a
-  daemon-side count surfaced via a per-provider flag (or inferred device-side from
-  unchanged data + elapsed time — pick one; daemon-side count is simpler).
+- **Absent** (`present == false`): pct `"--%"` (`COL_DIM`, bar `0`); reset line =
+  `absent_msg` (`"No Claude account"` / `"No OpenAI account"`).
+- **Connecting** (present, `session_pct < 0`): pct `"--%"`, reset `"Connecting..."`,
+  `COL_DIM`.
+- **Stale** (present, `session_pct >= 0`, latest `ok`/`cok` false): last-good
+  numbers with the reset line recolored `COL_STALE` (`0x6b6a64`). Never drops to
+  `0%`.
+- **Fresh** (present, `session_pct >= 0`, `ok`/`cok` true): pct color via
+  `pct_color`, reset via `format_reset_time` (`COL_DIM`).
 
-Define the exact strings/colors here.
+Strings are ASCII (bitmap fonts may lack `—`/`…`). `COL_STALE` / `COL_ACCENT_CODEX`
+are ui.cpp aliases of `THEME_*` tokens (§E).
 
 ### D.5 Layout
 
 The compact (368×448) `compute_layout()` usage-screen fields (`usage_panel_h`,
-`usage_panel_gap`, `usage_bar_y`, `usage_reset_y`, fonts) are **reused as-is** for
-the Codex screen — a conscious decision, the geometry is identical. No new
-`Layout` fields unless the Codex screen later needs distinct geometry.
+`usage_panel_gap`, `usage_bar_y`, `usage_reset_y`, fonts) are reused as-is for the
+Codex screen — the geometry is identical. No new `Layout` fields unless the Codex
+screen later needs distinct geometry.
 
 ### D.6 Splash creature driver (max of present providers)
 
-The splash creature's intensity is fed by `usage_rate_sample()` — today
-`main.cpp` (~line 310) calls `usage_rate_sample(usage.session_pct)` (Claude
-session % only). Change it to feed the **max session % across present providers**
-so it works for Claude-only, Codex-only, and both: e.g.
+The splash creature's intensity is fed by
 `usage_rate_sample(max_present_session_pct(usage))`, where the helper returns the
 greatest of `{session_pct if claude_present, codex_session_pct if codex_present}`
-(and a sensible idle default when neither is present). The group-change →
-`splash_pick_for_current_rate()` logic is otherwise unchanged.
+(both gated on `>= 0`), with an idle default when neither present provider has
+data. The group-change → `splash_pick_for_current_rate()` logic is unchanged.
 
 ## E. Branding (OpenAI)
 
-- New asset `logo_openai.h` — 80×80 **RGB565A8** (same format as `logo.h`),
-  generated from an official OpenAI mark PNG via `tools/png_to_lvgl.js`.
-  **Build-order dependency:** generate this header *before* ui.cpp `#include`s it,
-  or the build fails on an undefined symbol.
-- The per-screen logo swap is **new code** (today `ui_show_screen` only hides/
-  shows the single `logo_img`; it never calls `lv_image_set_src`). Add a second
-  module-level `lv_image_dsc_t logo_openai_dsc`, initialized in `ui_init()` via
-  **`init_icon_dsc_rgb565a8`** (the alpha-aware initializer — using the non-alpha
-  `init_icon_dsc` would corrupt the image via wrong stride/`data_size`). In
-  `ui_show_screen()` set `logo_img`'s source: Claude mark on Claude/Bluetooth,
-  OpenAI mark on Codex.
-- **`theme.h`** — add `THEME_ACCENT_CODEX` = **ChatGPT green `#10A37F`** (theme.h
-  exports `THEME_*`; the `COL_*` names are ui.cpp-local aliases). Add `#define
-  COL_ACCENT_CODEX THEME_ACCENT_CODEX` alongside the other aliases in ui.cpp, used
-  for the Codex screen title accent + spinner.
-- Bars keep the semantic `pct_color()` (green/amber/red) on both screens.
+- Asset `logo_openai.h` — 80×80 **RGB565A8** (same format as `logo_claude.h`). **Source:**
+  `lobehub/lobe-icons` `static-svg/icons/codex-color.svg` (MIT), with the white
+  background tile (`<path fill="#fff">`) stripped so the purple→blue gradient glyph
+  (`#B1A7FF→#7A9DFF→#3941FF`) sits on transparent — matching the colored, tile-less
+  Claude creature mark (`assets/logo_80.png`). Pipeline: `sharp` rasterizes the
+  tile-stripped SVG to an 80×80 transparent PNG, then it is packed RGB565A8 with
+  **no tint** (the gradient is preserved). The header must exist before ui.cpp
+  `#include`s it.
+- The per-screen logo swap adds a second `lv_image_dsc_t logo_openai_dsc`,
+  initialized in `ui_init()` via **`init_icon_dsc_rgb565a8`** (the alpha-aware
+  initializer — the non-alpha `init_icon_dsc` would corrupt the image via wrong
+  stride/`data_size`). `ui_show_screen()` sets `logo_img`'s source: Claude mark on
+  Claude/Bluetooth, OpenAI mark on Codex.
+- **`theme.h`** exports `THEME_ACCENT_CODEX` = **ChatGPT green `#10A37F`** and
+  `THEME_STALE` = `#6b6a64`; ui.cpp aliases them `COL_ACCENT_CODEX` / `COL_STALE`.
+  The Codex accent drives the Codex screen's spinner; bars keep the semantic
+  `pct_color()` (green/amber/red) on both screens.
 
 ## F. Animations
 
 Two separate animations exist in the Claude UI, very different in cost:
 
-1. **Usage-screen spinner** (`lbl_anim`, `ui_tick_anim`). **Cheap:** the
-   parameterized screen (§D.3) gives each provider its own spinner label, and the
-   `ui_tick_anim` gate change (§D.2) drives it. No assets. **Ship in v1.**
+1. **Usage-screen spinner** (`ui_tick_anim`). **Cheap:** the parameterized screen
+   (§D.3) gives each provider its own spinner label, and the `ui_tick_anim` gate
+   (§D.2) drives it. No assets. **Ship in v1.**
 2. **Splash pixel-art creatures** (claudepix 20×20 / indexed-palette engine).
    Codex has an analog — **"Codex Pets" / Codemon** (`/hatch` skill at
    `github.com/openai/skills`, community archive `codex-arena.fun`) — but the
-   format does **not** match. Claude art is one HTML page per animation exposing
-   a 20×20 `PRESET` (`tools/scrape_claudepix.js` ingests it directly). Codex pets
-   are **192×208 full-color RGBA WebP atlases** (9 states), so they require an
-   offline resize → quantize (≤10 colors) → frame-extract pipeline producing a
-   generated `codex_animations.h`. **Deferred** — heavier than the Claude
-   copy-paste flow and lossy at 20×20.
+   format does **not** match. Claude art is one HTML page per animation exposing a
+   20×20 `PRESET` (`tools/scrape_claudepix.js` ingests it directly). Codex pets are
+   **192×208 full-color RGBA WebP atlases** (9 states), so they require an offline
+   resize → quantize (≤10 colors) → frame-extract pipeline producing a generated
+   `codex_animations.h`. **Deferred** — heavier than the Claude copy-paste flow and
+   lossy at 20×20.
 
 ## G. Docs to update (don't ship the doc drift)
 
-- **`CLAUDE.md`** — currently describes `ui.{h,cpp}` as a "3-screen UI (splash,
-  usage, bluetooth)" and documents the 6-key wire format and daemon behavior.
-  Update to 4 screens, the 12-key wire format, the two-provider daemon, and the
-  new `logo_openai.h` / `THEME_ACCENT_CODEX`. Also reflect the `clawdmeter`
-  rebrand (§H) — the device name appears in CLAUDE.md and the daemon docs.
-
-## H. Rebrand to `clawdmeter` (advertised identity only)
-
-Scope is the **advertised identity**, not a full rename — config paths, the
-systemd unit (`claude-usage-daemon`), the cached-MAC path
-(`~/.config/claude-usage-monitor/ble-address`), and the existing Anthropic splash
-art stay as-is.
-
-- **`firmware/src/ble.cpp`** — `#define DEVICE_NAME "Claude Controller"` →
-  `"clawdmeter"` (drives `NimBLEDevice::init()` + the advertising `setName()`).
-  `hid_dev->setManufacturer("Anthropic")` → `"clawdmeter"` (neutral).
-- **Both daemons** — `DEVICE_NAME="Claude Controller"` → `"clawdmeter"` (the
-  connect-by-name constant used for first-run discovery).
-- **Re-pairing note:** the firmware BLE MAC is factory-burned and unchanged, so
-  MAC-cached reconnects still work; but the *name* changes, so OS-side HID
-  pairings may show the new name / need a one-time re-pair, and any name-based
-  discovery before a cache exists now matches `clawdmeter`. Call this out in the
-  daemon docs.
-- The per-screen logos already brand each provider screen (Claude mark / OpenAI
-  mark); the only remaining Anthropic-specific visual is the splash creature art,
-  which stays for now (neutral splash art is a deferred follow-up, tied to §F.2).
+- **`CLAUDE.md`** — must reflect the 4-screen UI (splash, Claude, Codex,
+  bluetooth), the 14-key wire format, the two-provider daemon, and the new
+  `logo_openai.h` / `THEME_ACCENT_CODEX`.
 
 ## Build / QA
 
@@ -352,9 +320,9 @@ art stay as-is.
   `waveshare_amoled_18` (live board), `waveshare_amoled_216`, and
   `waveshare_amoled_216_c6`.
 - Per-screen visual verification via `screenshot.sh`: temporarily default-boot
-  `SCREEN_CODEX` in `main.cpp` (the `ui_show_screen(SCREEN_SPLASH)` line), capture,
-  Read the PNG, iterate, **revert before commit**.
-- Wire-size validation: the full ~110-byte payload check from §C
+  `SCREEN_CODEX` / `SCREEN_USAGE` in `main.cpp` (the `ui_show_screen(SCREEN_SPLASH)`
+  line), capture, Read the PNG, iterate, **revert before commit**.
+- Wire-size validation: the full ~142-byte payload check from §C
   (`daemon/test_macos_connect.py` + a Linux one-off) before relying on it.
 
 ## Open questions
@@ -362,15 +330,12 @@ art stay as-is.
 All v1 product decisions are resolved (see "Decisions locked"). Remaining items
 are implementation-time tuning or deferred follow-ups:
 
-- Stale-hint threshold — how many consecutive failed polls before the stale hint
-  shows, and whether it's a daemon-side count or device-side inference (§D.4).
-  Pick during implementation.
 - Codex `wham/usage` rate-limit tolerance — start at 300s, measure, relax only if
   justified.
 - Codex token self-refresh — deferred fallback; only needed if the CLI stops
   refreshing `auth.json` near expiry (§A / §B.5).
-- **Deferred follow-ups:** the pixel-pet pipeline + the exact OpenAI "codemon
-  feed" URL (§F.2), and neutral splash art for the rebrand (§H).
+- **Deferred follow-up:** the pixel-pet pipeline + the exact OpenAI "codemon feed"
+  URL (§F.2).
 
 ## Sources
 

@@ -9,4 +9,16 @@ struct UsageData {
     char status[16];         // "allowed" or "limited"
     bool ok;                 // data parse succeeded
     bool valid;              // false until first successful parse
+
+    // Codex usage (populated when daemon sends Codex data)
+    float codex_session_pct;
+    int   codex_session_reset_mins;
+    float codex_weekly_pct;
+    int   codex_weekly_reset_mins;
+    char  codex_status[16];
+    bool  codex_ok;
+
+    // Provider presence flags
+    bool  claude_present;    // true by default (backward-compat)
+    bool  codex_present;     // false by default (absent on old payloads)
 };

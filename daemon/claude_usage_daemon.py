@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Claude Usage Tracker Daemon (BLE) — macOS port of claude-usage-daemon.sh.
 
-Polls the Claude OAuth usage endpoint and writes a JSON payload to the
-ESP32 "Claude Controller" peripheral over a custom GATT service. Uses
-bleak (CoreBluetooth backend on macOS).
+Polls the Claude OAuth usage endpoint and the Codex wham/usage endpoint
+independently, merges per-provider last-good caches, and writes a combined
+JSON payload to the ESP32 "Claude Controller" peripheral over a custom GATT service.
+Uses bleak (CoreBluetooth backend on macOS).
 """
 
 import asyncio
@@ -36,13 +37,32 @@ SCAN_TIMEOUT = 8.0
 # Linux: token lives in ~/.claude/.credentials.json.
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
+CODEX_AUTH_PATH = Path.home() / ".codex" / "auth.json"
 SAVED_ADDR_FILE = Path.home() / ".config" / "claude-usage-monitor" / "ble-address"
 
-API_URL = "https://api.anthropic.com/api/oauth/usage"
-API_HEADERS_TEMPLATE = {
+CLAUDE_API_URL = "https://api.anthropic.com/api/oauth/usage"
+CODEX_API_URL = "https://chatgpt.com/backend-api/wham/usage"
+
+CLAUDE_API_HEADERS_TEMPLATE = {
     "anthropic-beta": "oauth-2025-04-20",
     "User-Agent": "claude-code/2.1.5",
 }
+CODEX_API_HEADERS_TEMPLATE = {
+    "User-Agent": "claude-code/2.1.5",
+}
+
+# Module-level last-good caches: set to a dict of numeric fields on first
+# successful poll; None until then (drives the -1 sentinel path).
+_claude_last: dict | None = None
+_codex_last: dict | None = None
+# Latches True once Claude has been seen present (see claude_present()).
+_claude_seen = False
+
+
+async def _async_none():
+    """Awaitable resolving to None — placeholder in asyncio.gather for an absent
+    provider so both provider slots can be gathered uniformly."""
+    return None
 
 
 def log(msg: str) -> None:
@@ -120,6 +140,47 @@ def read_token() -> str | None:
     if sys.platform == "darwin":
         return _read_token_keychain()
     return _read_token_file()
+
+
+def read_codex_creds() -> tuple[str, str] | None:
+    """Read (access_token, account_id) from ~/.codex/auth.json, or None."""
+    try:
+        data = json.loads(CODEX_AUTH_PATH.read_text())
+        access_token = data["tokens"]["access_token"]
+        account_id = data["tokens"]["account_id"]
+        if not access_token or not account_id:
+            return None
+        return (access_token, account_id)
+    except (OSError, KeyError, ValueError, TypeError) as e:
+        log(f"Codex: error reading auth.json: {e}")
+        return None
+
+
+def claude_present() -> bool:
+    """Claude is present if we can obtain a token OR the creds file exists.
+
+    On macOS the token lives in the Keychain rather than a file, so we try
+    read_token() first. On Linux the creds file is the definitive signal.
+    Once Claude has been seen present, presence latches True so a *transient*
+    Keychain denial/timeout doesn't flip the page to "No Claude account" while
+    the account is still configured (a real removal needs a daemon restart).
+    """
+    global _claude_seen
+    if CREDENTIALS_PATH.exists():
+        _claude_seen = True
+        return True
+    # macOS only: token may be in Keychain with no on-disk file
+    if sys.platform == "darwin":
+        if read_token() is not None:
+            _claude_seen = True
+            return True
+        return _claude_seen
+    return False
+
+
+def codex_present() -> bool:
+    """Codex is present iff ~/.codex/auth.json exists."""
+    return CODEX_AUTH_PATH.exists()
 
 
 def load_cached_address() -> str | None:
@@ -266,22 +327,23 @@ async def discover_target(skip_addr: str | None = None):
     return address
 
 
-async def poll_api(token: str) -> dict | None:
-    headers = dict(API_HEADERS_TEMPLATE)
+async def poll_claude(token: str) -> dict | None:
+    """Fetch Claude usage; return dict of wire values on success, None on failure."""
+    headers = dict(CLAUDE_API_HEADERS_TEMPLATE)
     headers["Authorization"] = f"Bearer {token}"
     try:
         async with httpx.AsyncClient(timeout=20.0) as http:
-            resp = await http.get(API_URL, headers=headers)
+            resp = await http.get(CLAUDE_API_URL, headers=headers)
     except httpx.HTTPError as e:
-        log(f"API call failed: {e}")
+        log(f"Claude API call failed: {e}")
         return None
     if resp.status_code != 200:
-        log(f"Usage API HTTP {resp.status_code}: {resp.text[:200]}")
+        log(f"Claude usage API HTTP {resp.status_code}: {resp.text[:200]}")
         return None
     try:
         data = resp.json()
     except ValueError as e:
-        log(f"Usage API returned non-JSON: {e}")
+        log(f"Claude usage API returned non-JSON: {e}")
         return None
 
     now = datetime.now(timezone.utc)
@@ -310,7 +372,121 @@ async def poll_api(token: str) -> dict | None:
         "w": w,
         "wr": reset_minutes(sd.get("resets_at")),
         "st": "limited" if s >= 100 else "allowed",
-        "ok": True,
+    }
+
+
+async def poll_codex(access_token: str, account_id: str) -> dict | None:
+    """Fetch Codex wham/usage; return dict of wire values on success, None on failure."""
+    headers = dict(CODEX_API_HEADERS_TEMPLATE)
+    headers["Authorization"] = f"Bearer {access_token}"
+    headers["ChatGPT-Account-Id"] = account_id
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as http:
+            resp = await http.get(CODEX_API_URL, headers=headers)
+    except httpx.HTTPError as e:
+        log(f"Codex API call failed: {e}")
+        return None
+    if resp.status_code != 200:
+        log(f"Codex usage API HTTP {resp.status_code}: {resp.text[:200]}")
+        return None
+    try:
+        data = resp.json()
+    except ValueError as e:
+        log(f"Codex usage API returned non-JSON: {e}")
+        return None
+
+    try:
+        rl = data.get("rate_limit") or {}
+        pw = rl.get("primary_window") or {}
+        sw = rl.get("secondary_window") or {}
+        cs = round(pw.get("used_percent") or 0)
+        cw = round(sw.get("used_percent") or 0)
+        allowed = rl.get("allowed", True)
+        lim_reached = rl.get("limit_reached", False)
+        cst = "limited" if (not allowed or lim_reached or cs >= 100) else "allowed"
+        # reset_after_seconds is a relative integer — no ISO math needed
+        def secs_to_mins(v) -> int:
+            try:
+                return max(0, int(v) // 60)
+            except (TypeError, ValueError):
+                return -1
+        return {
+            "cs": cs,
+            "csr": secs_to_mins(pw.get("reset_after_seconds")),
+            "cw": cw,
+            "cwr": secs_to_mins(sw.get("reset_after_seconds")),
+            "cst": cst,
+        }
+    except Exception as e:
+        log(f"Codex usage parse error: {e}")
+        return None
+
+
+def build_payload(
+    sp: bool,
+    cp: bool,
+    claude_fresh: dict | None,
+    codex_fresh: dict | None,
+) -> dict:
+    """Merge per-provider fresh + last-good into the full wire snapshot.
+
+    Updates the module-level _claude_last / _codex_last caches when fresh
+    data is available.
+    """
+    global _claude_last, _codex_last
+
+    # An absent provider must not serve cached numbers from a previous account —
+    # drop its last-good so a re-add starts at the -1/"Connecting" sentinel.
+    if not sp:
+        _claude_last = None
+    if not cp:
+        _codex_last = None
+
+    claude_ok = claude_fresh is not None
+    codex_ok = codex_fresh is not None
+
+    if claude_ok:
+        _claude_last = claude_fresh
+    if codex_ok:
+        _codex_last = codex_fresh
+
+    # Resolve effective Claude values
+    if sp:
+        if claude_ok and claude_fresh:
+            c = claude_fresh
+        elif _claude_last:
+            c = _claude_last        # last-good; ok=False signals stale to device
+        else:
+            c = {"s": -1, "sr": -1, "w": -1, "wr": -1, "st": "allowed"}
+    else:
+        c = {"s": -1, "sr": -1, "w": -1, "wr": -1, "st": "allowed"}
+
+    # Resolve effective Codex values
+    if cp:
+        if codex_ok and codex_fresh:
+            x = codex_fresh
+        elif _codex_last:
+            x = _codex_last
+        else:
+            x = {"cs": -1, "csr": -1, "cw": -1, "cwr": -1, "cst": "unknown"}
+    else:
+        x = {"cs": -1, "csr": -1, "cw": -1, "cwr": -1, "cst": "unknown"}
+
+    return {
+        "s":   c["s"],
+        "sr":  c["sr"],
+        "w":   c["w"],
+        "wr":  c["wr"],
+        "st":  c["st"],
+        "ok":  claude_ok,
+        "sp":  sp,
+        "cp":  cp,
+        "cs":  x["cs"],
+        "csr": x["csr"],
+        "cw":  x["cw"],
+        "cwr": x["cwr"],
+        "cst": x["cst"],
+        "cok": codex_ok,
     }
 
 
@@ -373,17 +549,39 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
             elapsed = now - last_poll
             if session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL:
                 session.refresh_requested.clear()
-                token = read_token()
-                payload = await poll_api(token) if token else None
-                if payload is not None and await session.write_payload(payload):
+
+                # ---- Presence detection (re-checked every cycle) -------------
+                sp = claude_present()
+                cp = codex_present()
+
+                # ---- Poll present providers concurrently ---------------------
+                token = read_token() if sp else None
+                creds = read_codex_creds() if cp else None
+                if sp and not token:
+                    log("Claude: no token available")
+                claude_fresh, codex_fresh = await asyncio.gather(
+                    poll_claude(token) if token else _async_none(),
+                    poll_codex(creds[0], creds[1]) if creds else _async_none(),
+                )
+
+                # ---- Build combined payload and write ------------------------
+                payload = build_payload(sp, cp, claude_fresh, codex_fresh)
+                write_ok = await session.write_payload(payload)
+
+                # ---- Backoff reconciliation ----------------------------------
+                # Treat cycle as success if any present provider polled OK,
+                # or if no provider is present (nothing to poll).
+                n_present = (1 if sp else 0) + (1 if cp else 0)
+                n_ok = (1 if claude_fresh is not None else 0) + (1 if codex_fresh is not None else 0)
+                cycle_ok = write_ok and (n_ok > 0 or n_present == 0)
+
+                if cycle_ok:
                     last_poll = time.time()
                     used_successfully = True
                 else:
-                    # Failed/throttled poll (or no token): back off POLL_FAIL_BACKOFF
-                    # instead of retrying every TICK, so we don't storm the
-                    # rate-limited endpoint.
-                    if not token:
-                        log("No token; skipping poll")
+                    # All present providers failed (or write failed): back off
+                    # POLL_FAIL_BACKOFF instead of retrying every TICK, so we
+                    # don't storm the rate-limited usage endpoints.
                     last_poll = time.time() - POLL_INTERVAL + POLL_FAIL_BACKOFF
 
             try:
