@@ -1,8 +1,7 @@
 #include "ui.h"
 #include "splash.h"
 #include <lvgl.h>
-#include "logo_claude.h"
-#include "logo_openai.h"
+#include "logos.h"
 #include "icons.h"
 #include "hal/board_caps.h"
 

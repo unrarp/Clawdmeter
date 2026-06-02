@@ -273,14 +273,15 @@ data. The group-change → `splash_pick_for_current_rate()` logic is unchanged.
 
 ## E. Branding (OpenAI)
 
-- Asset `logo_openai.h` — 80×80 **RGB565A8** (same format as `logo_claude.h`). **Source:**
+- OpenAI mark added to `logos.h` — the shared logo bitmap header holds both the
+  Claude and OpenAI marks, each 80×80 **RGB565A8**. **Source:**
   `lobehub/lobe-icons` `static-svg/icons/codex-color.svg` (MIT), with the white
   background tile (`<path fill="#fff">`) stripped so the purple→blue gradient glyph
   (`#B1A7FF→#7A9DFF→#3941FF`) sits on transparent — matching the colored, tile-less
   Claude creature mark (`assets/logo_80.png`). Pipeline: `sharp` rasterizes the
   tile-stripped SVG to an 80×80 transparent PNG, then it is packed RGB565A8 with
-  **no tint** (the gradient is preserved). The header must exist before ui.cpp
-  `#include`s it.
+  **no tint** (the gradient is preserved). `logos.h` must define both marks before
+  ui.cpp `#include`s it.
 - The per-screen logo swap adds a second `lv_image_dsc_t logo_openai_dsc`,
   initialized in `ui_init()` via **`init_icon_dsc_rgb565a8`** (the alpha-aware
   initializer — the non-alpha `init_icon_dsc` would corrupt the image via wrong
@@ -312,7 +313,7 @@ Two separate animations exist in the Claude UI, very different in cost:
 
 - **`CLAUDE.md`** — must reflect the 4-screen UI (splash, Claude, Codex,
   bluetooth), the 14-key wire format, the two-provider daemon, and the new
-  `logo_openai.h` / `THEME_ACCENT_CODEX`.
+  `logos.h` / `THEME_ACCENT_CODEX`.
 
 ## Build / QA
 
