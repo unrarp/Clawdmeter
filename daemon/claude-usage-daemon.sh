@@ -1,15 +1,16 @@
 #!/bin/bash
 # Claude Usage Tracker Daemon (BLE)
-# Reads Claude Code OAuth token, polls usage via API, sends to ESP32 over BLE GATT.
+# Reads Claude Code OAuth token, polls the OAuth usage endpoint, sends to ESP32 over BLE GATT.
 # Auto-connects and reconnects to the Claude Controller BLE device.
-# Dependencies: curl, awk, bluetoothctl
+# Dependencies: curl, awk, python3, bluetoothctl
 
 DEVICE_NAME="Claude Controller"
 DEVICE_MAC="${DEVICE_MAC:-}"  # auto-discovered if empty
 SERVICE_UUID="4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID="4c41555a-4465-7669-6365-000000000002"
 REQ_CHAR_UUID="4c41555a-4465-7669-6365-000000000004"
-POLL_INTERVAL=60
+POLL_INTERVAL=300    # /api/oauth/usage is rate-limited (429/529 above ~1 req/min); 5 min is safe and plenty fresh
+POLL_FAIL_BACKOFF=60 # after a failed/throttled poll, retry this soon instead of waiting the full interval
 TICK=5
 SAVED_MAC_FILE="$HOME/.config/claude-usage-monitor/ble-address"
 REFRESH_FLAG="/tmp/claude-usage-refresh-$$"
@@ -194,42 +195,64 @@ write_gatt() {
 poll() {
     local token
     token=$(read_token) || { log "Error: could not read token"; return 1; }
-    local now
-    now=$(date +%s)
 
-    local headers
-    headers=$(curl -s -D - -o /dev/null \
-        "https://api.anthropic.com/v1/messages" \
+    # Pull live usage straight from the OAuth usage endpoint. Unlike the old
+    # /v1/messages header-scrape, this is a purpose-built JSON endpoint: no
+    # throwaway inference call, utilization is already a percentage (0-100),
+    # and resets come back as ISO-8601 timestamps. It IS rate-limited, though
+    # (429/529 above ~1 req/min) — hence POLL_INTERVAL above.
+    local resp http body
+    resp=$(curl -s -w $'\n%{http_code}' \
+        "https://api.anthropic.com/api/oauth/usage" \
         -H "Authorization: Bearer $token" \
-        -H "anthropic-version: 2023-06-01" \
         -H "anthropic-beta: oauth-2025-04-20" \
-        -H "Content-Type: application/json" \
         -H "User-Agent: claude-code/2.1.5" \
-        -d '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
         2>/dev/null) || { log "Error: API call failed"; return 1; }
+    http=$(printf '%s' "$resp" | tail -n1)
+    body=$(printf '%s' "$resp" | sed '$d')
 
-    local s5h_util s5h_reset s7d_util s7d_reset status
-    s5h_util=$(echo "$headers" | grep -i "anthropic-ratelimit-unified-5h-utilization" | tr -d '\r' | awk '{print $2}')
-    s5h_reset=$(echo "$headers" | grep -i "anthropic-ratelimit-unified-5h-reset" | tr -d '\r' | awk '{print $2}')
-    s7d_util=$(echo "$headers" | grep -i "anthropic-ratelimit-unified-7d-utilization" | tr -d '\r' | awk '{print $2}')
-    s7d_reset=$(echo "$headers" | grep -i "anthropic-ratelimit-unified-7d-reset" | tr -d '\r' | awk '{print $2}')
-    status=$(echo "$headers" | grep -i "anthropic-ratelimit-unified-5h-status" | tr -d '\r' | awk '{print $2}')
+    if [ "$http" != "200" ]; then
+        log "Usage API HTTP $http: $(printf '%s' "$body" | tr -d '\n' | head -c 160)"
+        return 1
+    fi
 
-    s5h_util=${s5h_util:-0}
-    s5h_reset=${s5h_reset:-0}
-    s7d_util=${s7d_util:-0}
-    s7d_reset=${s7d_reset:-0}
-    status=${status:-unknown}
-
+    # Map the endpoint JSON to the compact wire format the firmware parses:
+    # five_hour -> session (s/sr), seven_day -> weekly (w/wr). Utilization is
+    # already 0-100, so no *100. resets_at (ISO-8601) -> minutes-from-now.
     local payload
-    payload=$(awk -v u5="$s5h_util" -v r5="$s5h_reset" -v u7="$s7d_util" -v r7="$s7d_reset" -v st="$status" -v now="$now" \
-        'BEGIN {
-            sp = sprintf("%.0f", u5 * 100);
-            sr = (r5 - now) / 60; sr = sr > 0 ? sprintf("%.0f", sr) : 0;
-            wp = sprintf("%.0f", u7 * 100);
-            wr = (r7 - now) / 60; wr = wr > 0 ? sprintf("%.0f", wr) : 0;
-            printf "{\"s\":%s,\"sr\":%s,\"w\":%s,\"wr\":%s,\"st\":\"%s\",\"ok\":true}", sp, sr, wp, wr, st;
-        }')
+    payload=$(printf '%s' "$body" | python3 -c '
+import sys, json
+from datetime import datetime, timezone
+
+def mins(iso):
+    if not iso:
+        return -1
+    try:
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None:               # naive timestamp -> assume UTC
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0, round((dt - datetime.now(timezone.utc)).total_seconds() / 60))
+    except Exception:                       # unparseable / arithmetic error -> unknown
+        return -1
+
+d = json.load(sys.stdin)
+fh = d.get("five_hour") or {}
+sd = d.get("seven_day") or {}
+# Utilization is already 0-100; round once and derive st from the rounded value
+# so "s":100 can never pair with "st":"allowed" (raw 99.6 rounds up to 100).
+s = round(fh.get("utilization") or 0)
+w = round(sd.get("utilization") or 0)
+print(json.dumps({
+    "s": s,
+    "sr": mins(fh.get("resets_at")),
+    "w": w,
+    "wr": mins(sd.get("resets_at")),
+    "st": "limited" if s >= 100 else "allowed",
+    "ok": True,
+}, separators=(",", ":")))
+') || { log "Error: failed to parse usage JSON"; return 1; }
+
+    [ -n "$payload" ] || { log "Error: empty payload after parse"; return 1; }
 
     log "Sending: $payload"
     write_gatt "$RX_CHAR_PATH" "$payload" || { log "Write failed"; return 1; }
@@ -283,8 +306,10 @@ while true; do
 
     start_notify_subscriber
 
-    # Poll loop: tick every $TICK seconds. Poll Anthropic when the
-    # interval has elapsed OR when the ESP requested a refresh.
+    # Poll loop: tick every $TICK seconds. Poll Anthropic when the interval has
+    # elapsed OR when the ESP requested a refresh. On a failed/throttled poll,
+    # back off by POLL_FAIL_BACKOFF (not the full interval and not every tick)
+    # so we recover quickly without storming the rate-limited usage endpoint.
     LAST_POLL=0
     while is_connected; do
         NOW=$(date +%s)
@@ -293,7 +318,11 @@ while true; do
                 log "Refresh requested by device"
                 rm -f "$REFRESH_FLAG"
             fi
-            poll && LAST_POLL=$NOW
+            if poll; then
+                LAST_POLL=$NOW
+            else
+                LAST_POLL=$(( NOW - POLL_INTERVAL + POLL_FAIL_BACKOFF ))
+            fi
         fi
         sleep "$TICK"
     done

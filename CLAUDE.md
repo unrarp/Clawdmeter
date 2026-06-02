@@ -131,13 +131,15 @@ See `~/.claude/projects/.../memory/` files for persistent context (user is an em
 
 ## Daemon / host side
 
-Bash daemon (`daemon/claude-usage-daemon.sh`) reads OAuth token, polls Anthropic API, sends JSON over BLE GATT. Run with `systemctl --user start claude-usage-daemon`. The unit file's `ExecStart` is the absolute path to the script — repoint it when switching between the worktree and the main checkout.
+Bash daemon (`daemon/claude-usage-daemon.sh`) reads OAuth token, polls Anthropic for usage, sends JSON over BLE GATT. Run with `systemctl --user start claude-usage-daemon`. The unit file's `ExecStart` is the absolute path to the script — repoint it when switching between the worktree and the main checkout.
+
+**Usage source:** polls `GET https://api.anthropic.com/api/oauth/usage` (Bearer = subscription OAuth token, `anthropic-beta: oauth-2025-04-20`; needs `user:profile` scope). Returns `{five_hour,seven_day,...}` with `utilization` already a **0-100 percentage** (no ×100) and `resets_at` as ISO-8601. `five_hour`→session (`s`/`sr`), `seven_day`→weekly (`w`/`wr`); `st` derived (`limited` if session util ≥ 100). **Foot-gun:** this endpoint is rate-limited — empirically 429/529 above ~1 req/min — hence the 300s interval below; don't lower it. (Earlier versions scraped rate-limit *headers* off a throwaway 1-token `/v1/messages` POST; that had generous limits but burned a token + spoofed the client. The wire format to the firmware is unchanged.)
 
 **Discovery & resilience:**
 
 - Connects by name (`"Claude Controller"`) on first run, caches resolved MAC at `~/.config/claude-usage-monitor/ble-address`. ESP32 BLE addresses are factory-burned per-chip, so swapping any board invalidates the cache.
 - On connect failure: cache is dropped AND device is removed from bluez (`bluetoothctl remove`) so the next scan won't re-pick a dead MAC. Multi-candidate scans pick `head -1` and let the failure cycle converge.
-- `POLL_INTERVAL=60`, `TICK=5`. Inner loop wakes every 5s to detect disconnects fast; polls Anthropic when 60s elapsed OR when ESP fires a refresh request.
+- `POLL_INTERVAL=300`, `TICK=5`, `POLL_FAIL_BACKOFF=60`. Inner loop wakes every 5s to detect disconnects fast; polls Anthropic when 300s elapsed OR when ESP fires a refresh request. A failed/throttled poll backs off `POLL_FAIL_BACKOFF` (not the full interval, not every tick) so it recovers fast without storming the rate-limited endpoint.
 
 **GATT characteristics on service `4c41555a-...0001`:**
 

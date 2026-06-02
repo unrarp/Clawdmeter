@@ -62,7 +62,7 @@ After flashing, open **System Settings → Bluetooth** and click *Connect* next 
 
 ### Install the daemon
 
-The daemon reads your Claude OAuth token from the macOS Keychain (service `Claude Code-credentials`), polls usage every 60 s, and pushes it to the display over BLE.
+The daemon reads your Claude OAuth token from the macOS Keychain (service `Claude Code-credentials`), polls usage every 5 minutes, and pushes it to the display over BLE.
 
 ```bash
 ./install-mac.sh
@@ -107,7 +107,7 @@ The MAC address is shown on the Bluetooth screen — press the middle (PWR) butt
 
 ### Install the daemon
 
-The daemon polls your Claude usage every 60 seconds and sends it to the display over BLE.
+The daemon polls your Claude usage every 5 minutes and sends it to the display over BLE.
 
 ```bash
 ./install.sh
@@ -121,8 +121,8 @@ View logs: `journalctl --user -u claude-usage-daemon -f`
 ## How it works
 
 1. The daemon reads your Claude Code OAuth token — from the macOS Keychain (service `Claude Code-credentials`) on macOS, or from `~/.claude/.credentials.json` on Linux.
-2. It makes a minimal API call to `api.anthropic.com/v1/messages` — one token of Haiku, basically free.
-3. The usage numbers come straight out of the response headers (`anthropic-ratelimit-unified-5h-utilization` and friends).
+2. It polls `api.anthropic.com/api/oauth/usage` — a read-only usage endpoint that costs no tokens (rate-limited, so the daemon polls every 5 minutes).
+3. The session/weekly percentages and reset times come straight out of that JSON response (`five_hour` / `seven_day`).
 4. The daemon connects to the ESP32 over BLE and writes a JSON payload to the GATT RX characteristic.
 5. The firmware parses it and updates the LVGL dashboard.
 6. The firmware also tracks the rate of change of session % over a 5-minute window and picks splash animations from the matching mood group.

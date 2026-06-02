@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Claude Usage Tracker Daemon (BLE) — macOS port of claude-usage-daemon.sh.
 
-Polls Claude API rate-limit headers and writes a JSON payload to the
+Polls the Claude OAuth usage endpoint and writes a JSON payload to the
 ESP32 "Claude Controller" peripheral over a custom GATT service. Uses
 bleak (CoreBluetooth backend on macOS).
 """
@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -26,7 +27,8 @@ SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
 REQ_CHAR_UUID = "4c41555a-4465-7669-6365-000000000004"
 
-POLL_INTERVAL = 60
+POLL_INTERVAL = 300   # /api/oauth/usage is rate-limited (429/529 above ~1 req/min)
+POLL_FAIL_BACKOFF = 60  # after a failed/throttled poll, retry this soon, not the full interval
 TICK = 5
 SCAN_TIMEOUT = 8.0
 
@@ -36,17 +38,10 @@ KEYCHAIN_SERVICE = "Claude Code-credentials"
 CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 SAVED_ADDR_FILE = Path.home() / ".config" / "claude-usage-monitor" / "ble-address"
 
-API_URL = "https://api.anthropic.com/v1/messages"
+API_URL = "https://api.anthropic.com/api/oauth/usage"
 API_HEADERS_TEMPLATE = {
-    "anthropic-version": "2023-06-01",
     "anthropic-beta": "oauth-2025-04-20",
-    "Content-Type": "application/json",
     "User-Agent": "claude-code/2.1.5",
-}
-API_BODY = {
-    "model": "claude-haiku-4-5-20251001",
-    "max_tokens": 1,
-    "messages": [{"role": "user", "content": "hi"}],
 }
 
 
@@ -276,42 +271,47 @@ async def poll_api(token: str) -> dict | None:
     headers["Authorization"] = f"Bearer {token}"
     try:
         async with httpx.AsyncClient(timeout=20.0) as http:
-            resp = await http.post(API_URL, headers=headers, json=API_BODY)
+            resp = await http.get(API_URL, headers=headers)
     except httpx.HTTPError as e:
         log(f"API call failed: {e}")
         return None
-    if resp.status_code >= 400:
-        log(f"API HTTP {resp.status_code}: {resp.text[:200]}")
+    if resp.status_code != 200:
+        log(f"Usage API HTTP {resp.status_code}: {resp.text[:200]}")
+        return None
+    try:
+        data = resp.json()
+    except ValueError as e:
+        log(f"Usage API returned non-JSON: {e}")
         return None
 
-    def hdr(name: str, default: str = "0") -> str:
-        return resp.headers.get(name, default)
+    now = datetime.now(timezone.utc)
 
-    now = time.time()
-
-    def reset_minutes(reset_ts: str) -> int:
+    def reset_minutes(iso: str | None) -> int:
+        """ISO-8601 -> whole minutes from now; -1 if absent/unparseable."""
+        if not iso:
+            return -1
         try:
-            r = float(reset_ts)
-        except ValueError:
-            return 0
-        mins = (r - now) / 60.0
-        return int(round(mins)) if mins > 0 else 0
+            dt = datetime.fromisoformat(iso)
+            if dt.tzinfo is None:               # naive timestamp -> assume UTC
+                dt = dt.replace(tzinfo=timezone.utc)
+            return max(0, round((dt - now).total_seconds() / 60))
+        except (ValueError, TypeError):
+            return -1
 
-    def pct(util: str) -> int:
-        try:
-            return int(round(float(util) * 100))
-        except ValueError:
-            return 0
-
-    payload = {
-        "s": pct(hdr("anthropic-ratelimit-unified-5h-utilization")),
-        "sr": reset_minutes(hdr("anthropic-ratelimit-unified-5h-reset")),
-        "w": pct(hdr("anthropic-ratelimit-unified-7d-utilization")),
-        "wr": reset_minutes(hdr("anthropic-ratelimit-unified-7d-reset")),
-        "st": hdr("anthropic-ratelimit-unified-5h-status", "unknown"),
+    # Utilization is already 0-100; round once and derive st from the rounded
+    # value so "s":100 can never pair with "st":"allowed" (raw 99.6 rounds up).
+    fh = data.get("five_hour") or {}
+    sd = data.get("seven_day") or {}
+    s = round(fh.get("utilization") or 0)
+    w = round(sd.get("utilization") or 0)
+    return {
+        "s": s,
+        "sr": reset_minutes(fh.get("resets_at")),
+        "w": w,
+        "wr": reset_minutes(sd.get("resets_at")),
+        "st": "limited" if s >= 100 else "allowed",
         "ok": True,
     }
-    return payload
 
 
 class Session:
@@ -374,14 +374,17 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
             if session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL:
                 session.refresh_requested.clear()
                 token = read_token()
-                if not token:
-                    log("No token; skipping poll")
+                payload = await poll_api(token) if token else None
+                if payload is not None and await session.write_payload(payload):
+                    last_poll = time.time()
+                    used_successfully = True
                 else:
-                    payload = await poll_api(token)
-                    if payload is not None:
-                        if await session.write_payload(payload):
-                            last_poll = time.time()
-                            used_successfully = True
+                    # Failed/throttled poll (or no token): back off POLL_FAIL_BACKOFF
+                    # instead of retrying every TICK, so we don't storm the
+                    # rate-limited endpoint.
+                    if not token:
+                        log("No token; skipping poll")
+                    last_poll = time.time() - POLL_INTERVAL + POLL_FAIL_BACKOFF
 
             try:
                 await asyncio.wait_for(session.refresh_requested.wait(), timeout=TICK)
