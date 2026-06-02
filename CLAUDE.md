@@ -37,35 +37,22 @@ Connects to a host daemon over BLE; the daemon polls the Anthropic (Claude) and 
 
 ```text
 firmware/src/
-  hal/                      — board-agnostic interfaces shared code calls into
-    board_caps.h            — runtime BoardCaps struct (W, H, button_count, has_* flags)
-    display_hal.h           — init / begin / set_brightness / draw_bitmap / tick / round_area
-    touch_hal.h             — init / read(&x, &y, &pressed)
-    input_hal.h             — init / is_held(PRIMARY|SECONDARY)
-    power_hal.h             — init / tick / battery_pct / is_charging / pwr_pressed (edge)
-    imu_hal.h               — init / tick / rotation_quadrant
-  boards/
-    waveshare_amoled_216/   — CO5300 + CST9220 + AXP PKEY + QMI8658 rotation
-    waveshare_amoled_18/    — SH8601 + FT3168 + AXP + XCA9554 (PWR via EXIO4), no rotation
-    template/               — copy this to bootstrap a new port
-  main.cpp                  — setup() + loop(): HAL calls only, zero #ifdef BOARD_*
-  ui.{h,cpp}                — 4-screen UI (splash, Claude, Codex, bluetooth). The two usage screens share init_provider_screen()/ui_update_provider() over a ProviderWidgets struct. compute_layout() picks fonts/positions from board_caps() (responsive — current breakpoint: H >= 460 → large, else compact)
-  splash.{h,cpp}            — 20×20 pixel-art engine. CELL = min(W,H)/20, centered.
-  ble.{h,cpp}               — NimBLE peripheral: custom data service + HID keyboard
-  data.h                    — UsageData struct (flat; Claude + Codex fields, per-provider present/ok flags)
-  icons.h                   — icon arrays. Battery (5×) are RGB565A8 with alpha; rest are raw RGB565.
-  logo_claude.h             — 80×80 RGB565A8 Claude mark
-  logo_openai.h             — 80×80 RGB565A8 OpenAI Codex mark (lobe-icons codex-color.svg, tile stripped; gradient preserved)
-  font_*.c                  — pre-compiled LVGL 9 bitmap fonts (Tiempos 56/34, Styrene 48/36/28/24/20/16/14/12, Mono 32/18)
-  splash_animations.h       — generated, do not hand-edit
-docs/porting/               — adding-a-board.md, hal-contract.md, capability-flags.md
+  hal/            — interfaces shared code calls into (display, touch, input, power, imu, board_caps)
+  boards/<name>/  — one folder per board implements the HAL; template/ bootstraps a new port
+  main.cpp        — setup()/loop(): HAL calls only
+  ui.{h,cpp}      — responsive 4-screen UI; compute_layout() drives fonts/positions off board_caps()
+  splash.{h,cpp}  — 20×20 pixel-art engine
+  ble.{h,cpp}     — NimBLE peripheral: custom data service + HID keyboard
+  data.h          — UsageData struct (Claude + Codex fields)
+  splash_animations.h — generated, do not hand-edit
 ```
 
-Each board folder contains: `board.h` (pins, I2C addresses, `BOARD_HAS_*` flags),
-`board_init.cpp` (Wire.begin + any IO expander), `display.cpp`, `touch.cpp`,
-`input.cpp`, `power.cpp`, `imu.cpp`, `caps.cpp` (the `BoardCaps` instance), plus
-any board-private hardware drivers (e.g. `io_expander.{h,cpp}` on AMOLED-1.8).
-PlatformIO's `build_src_filter` includes shared code + one board's folder per env.
+A board folder implements `board.h` (pins, I2C addresses, `BOARD_HAS_*` flags),
+`board_init.cpp` (Wire + any IO expander — runs before display init), the per-HAL
+`.cpp`s, and `caps.cpp` (its `BoardCaps`). `build_src_filter` compiles shared code +
+one board folder per env. **The HAL boundary is load-bearing — no `#ifdef BOARD_*` in
+shared code; add a `BoardCaps` field or a per-board file instead.** Full walk-through
+and the interfaces a port must implement: [`docs/porting/`](docs/porting/).
 
 ## Build / flash
 
@@ -91,7 +78,7 @@ The boot screen is `SCREEN_SPLASH` and only advances on a physical button press,
 1. **CO5300 cannot rotate.** Its MADCTL only supports axis flips, not column/row exchange. Rotation is done by **CPU pixel remapping inside `display_hal_draw_bitmap`** in `boards/waveshare_amoled_216/display.cpp`. We use **PARTIAL render mode with strip rotation** (small 480×40 strips, fast). On rotation change → AMOLED brightness flash → force redraw (handled inside `display_hal_tick`).
 2. **OPI PSRAM** required: `board_build.arduino.memory_type = qio_opi` in platformio.ini. Without this, `MALLOC_CAP_SPIRAM` returns NULL and the screen is black.
 3. **pioarduino platform required.** GFX Library for Arduino needs Arduino Core 3.x (`esp32-hal-periman.h`), not the 2.x that standard `espressif32` ships. We pin `pioarduino/platform-espressif32` 55.03.38-1.
-4. **LVGL 9 font patching.** `lv_font_conv` outputs LVGL 8 format. Must remove `#if LVGL_VERSION_MAJOR >= 8` guards, drop `.cache` field, add `.release_glyph`, `.kerning`, `.static_bitmap`, `.fallback`, `.user_data`. Without patching, fonts render invisible.
+4. **Fonts are pre-baked bitmaps — no runtime rasterizer.** Adding a size means generating a new `font_<face>_<size>.c` (`lv_font_conv`) and `LV_FONT_DECLARE`-ing it. `lv_font_conv` ≥1.5.3 `--format lvgl` output is already LVGL-9-compatible — **do not hand-patch it**, and don't "fix" new files to match the older hand-patched `font_*.c` style. See `.claude/rules/fonts.md`.
 5. **Touch reading is centralized inside each board's `touch.cpp`.** The HAL `touch_hal_read()` is called once per loop from `my_touch_cb`; the board's implementation owns its latched `touch_pressed/x/y` state. Don't call the underlying controller from anywhere else — CST9220's `getPoint()` etc. do a full I2C transaction and concurrent callers consume each other's data.
 6. **Even-aligned flush regions.** `display_hal_round_area` (called from `rounder_cb`) is what each board uses to enforce this. Required on CO5300, harmless on SH8601.
 7. **Touch axis swap/mirror is per-board.** The 2.16's CST9220 needs `setSwapXY(true)` + `setMirrorXY(true, false)` — applied inside `boards/waveshare_amoled_216/touch.cpp::touch_hal_init()`. New ports apply their own.
@@ -99,54 +86,30 @@ The boot screen is `SCREEN_SPLASH` and only advances on a physical button press,
 9. **Per-board pre-init is `board_init()`.** Each board's `board_init.cpp` brings up `Wire` and any reset-gating IO expander BEFORE `display_hal_init()`. Skipping the IO expander release on AMOLED-1.8 leaves SH8601 + FT3168 in reset and they silently fail to probe.
 10. **No `#ifdef BOARD_*` in shared code.** The whole point of the refactor — if you're about to add one, you probably want a `BoardCaps` field or a per-board file instead. See `docs/porting/capability-flags.md`.
 
-## Icons
+## Icons & splash regen (tooling-driven)
 
-`tools/png_to_lvgl.js <input.png> <symbol> [W_MACRO] [H_MACRO] [--tint=RRGGBB | --no-tint]` converts an alpha PNG to RGB565A8. Default tint is white (`0xFFFFFF`) — necessary for Lucide PNGs. Splice output into `firmware/src/icons.h` and use `init_icon_dsc_rgb565a8()` in ui.cpp. Currently only the 5 battery icons use this format; the rest are still raw RGB565 baked over the panel background, fine because they live inside opaque zones.
+Both are regenerated by scripts and documented in `tools/README.md` + the root README — don't hand-edit the generated output. Two foot-guns worth knowing here:
 
-## Splash animations
-
-13 × 20×20 pixel-art creature animations sourced from
-[claudepix.vercel.app](https://claudepix.vercel.app). Pipeline:
-
-```bash
-node tools/scrape_claudepix.js  # → tools/claudepix_data/*.json
-node tools/convert_to_c.js      # → firmware/src/splash_animations.h
-```
-
-Each animation has a per-animation 10-color RGB565 palette. Cell values 0..9 index it. Default boot screen.
+- **Icons:** `tools/png_to_lvgl.js` → splice into `firmware/src/icons.h`, draw with `init_icon_dsc_rgb565a8()`. The RGB565A8 planar layout + white-tint requirement is gotcha #8. Only the 5 battery icons use RGB565A8; the rest are raw RGB565 baked over opaque panel zones.
+- **Splash:** `node tools/scrape_claudepix.js && node tools/convert_to_c.js` → `firmware/src/splash_animations.h`. 20×20 pixel-art, per-anim 10-color palette (cells 0..9 index it). Default boot screen.
 
 ## User profile / preferences
 
 See `~/.claude/projects/.../memory/` files for persistent context (user is an embedded-beginner senior dev, brand-conscious, prefers iterative UI refinement, dislikes me authoring my own art when third-party assets are intended). Always read those memory files at session start.
 
-## Recent session highlights
-
-- **Codex provider (2026-06-02).** Added an OpenAI Codex usage screen alongside Claude — fixed cycle Splash→Claude→Codex→Bluetooth, parameterized over a `ProviderWidgets` struct (`init_provider_screen`/`ui_update_provider`), OpenAI mark (`logo_openai.h`) + ChatGPT-green accent (`THEME_ACCENT_CODEX`), Codex-authentic "Working/Thinking" spinner words. The daemon polls a second provider (`wham/usage`) with per-provider presence + last-good caching; the wire grew to 14 keys.
-- **Compact-layout polish (2026-06-02).** Retuned the compact (368×448) breakpoint in `compute_layout()`, which was over-shrunk: panels and fonts now stay close to the large layout (the 1.8" is only ~7% shorter). Moved the remaining hardcoded Usage fonts + Bluetooth offsets/fonts into the `Layout` struct, added `font_styrene_36` for the `%` headline, and added `row_center_y()` to vertically center the title + battery against the logo (driven by `L.logo_y`). Both breakpoints now share `content_y`/`usage_panel_gap`/label fonts (set once before the `if/else`).
-- **Device-abstraction refactor (2026-05-18).** All board-conditional code moved out of shared files into `boards/<name>/` and behind a HAL in `hal/`. ~30 `#ifdef BOARD_*` blocks went to zero. UI is responsive via `compute_layout()` driven by `board_caps()`. New ports add a folder + a PlatformIO env — no shared file edits.
-- Added second board port: Waveshare AMOLED-1.8 (368×448 portrait, SH8601, FT3168, XCA9554 IO expander).
-- Migrated from Panlee SC01 Plus (480×320 IPS) to Waveshare 2.16" AMOLED (480×480 square). Full hardware/library swap.
-- Added IMU auto-rotation, battery indicator, USB-state-aware screen switching.
-- Added splash screen with scraped pixel-art animations and 3-button physical input layout.
-- Fonts and icons re-scaled ~1.9× for the higher-DPI panel.
-- All UI margins widened to 20px to clear the rounded display corners.
-- Battery icons converted to RGB565A8 alpha so they blend cleanly over the splash animations.
-
 ## Daemon / host side
 
-Bash daemon (`daemon/claude-usage-daemon.sh`, Linux) and its macOS port (`daemon/claude_usage_daemon.py`) read each provider's creds, poll **two** providers — Anthropic (Claude) and OpenAI (Codex) — and send a combined JSON snapshot over BLE GATT. Run with `systemctl --user start claude-usage-daemon`. The unit file's `ExecStart` is the absolute path to the script — repoint it when switching between the worktree and the main checkout. **Foot-gun:** the daemon is a long-running `while` loop, so editing the script changes nothing until `systemctl --user restart` — the old logic stays resident in memory (this is how you get a stale daemon silently emitting the old wire format).
+Bash daemon (`daemon/claude-usage-daemon.sh`, Linux) + macOS Python port (`daemon/claude_usage_daemon.py`) poll **two** providers — Anthropic (Claude) and OpenAI (Codex) — and push one combined JSON snapshot over BLE GATT. `systemctl --user start claude-usage-daemon`. **All daemon implementation rules — API field-mapping, the 14-key wire format, poll constants (300s/5s tick/60s backoff), token handling, and the presence/cache/env-var foot-guns — live in [`.claude/rules/daemon.md`](.claude/rules/daemon.md)** (auto-loads when editing `daemon/**`; read it manually if you touch the firmware JSON parser or `data.h`) and `docs/decisions/2026-06-02-api-oauth-usage-rate-limit.md`.
 
-**Usage source:** polls `GET https://api.anthropic.com/api/oauth/usage` (Bearer = subscription OAuth token, `anthropic-beta: oauth-2025-04-20`; needs `user:profile` scope). Returns `{five_hour,seven_day,...}` with `utilization` already a **0-100 percentage** (no ×100) and `resets_at` as ISO-8601. `five_hour`→session (`s`/`sr`), `seven_day`→weekly (`w`/`wr`); `st` derived (`limited` if session util ≥ 100). **Foot-gun:** this endpoint is rate-limited — empirically 429/529 above ~1 req/min — hence the 300s interval below; don't lower it. (Earlier versions scraped rate-limit *headers* off a throwaway 1-token `/v1/messages` POST; that had generous limits but burned a token + spoofed the client.)
+**Operating foot-guns:**
 
-**Codex usage source:** polls `GET https://chatgpt.com/backend-api/wham/usage` with `Authorization: Bearer <tokens.access_token>` + `ChatGPT-Account-Id: <tokens.account_id>`, both from `~/.codex/auth.json` (NOT the Claude creds file). `rate_limit.primary_window`→session (`cs`/`csr`), `secondary_window`→weekly (`cw`/`cwr`); `used_percent` is already 0–100; `reset_after_seconds // 60`→minutes (no ISO math). `cst` = `limited` if `!allowed`/`limit_reached`/`cs ≥ 100`. Reuses the 300s interval (its own rate-limit tolerance is unverified). See `.claude/rules/daemon.md`.
+- The unit's `ExecStart` is the script's absolute path — repoint it when switching between the worktree and the main checkout.
+- The daemon is a long-running `while` loop: editing the script changes nothing until `systemctl --user restart` — the old logic stays resident (this is how you get a stale daemon silently emitting the old wire format).
 
-**Two-provider model & wire format:** each provider is independently optional. Presence (`sp`/`cp`) = its creds file exists, re-checked every cycle (drives the device's "No account" page, not page-hiding). Every cycle the daemon polls each present provider, holds a per-provider last-good cache, and always writes a **full 14-key snapshot** — `s/sr/w/wr/st/ok` (Claude) + `sp/cp` (presence) + `cs/csr/cw/cwr/cst/cok` (Codex) — so one provider's failure never blanks the other's panel: a present-but-failing provider keeps its last-good numbers with `ok:false` (device dims them); a never-succeeded provider sends `-1` sentinels (device shows "Connecting…"). The cycle counts as success (advances the poll timer) if any present provider polled OK, else it takes `POLL_FAIL_BACKOFF`. In the bash daemon the inline `python3 -c` merge receives the two bodies/HTTP codes/presence via **env vars that must PREFIX `python3`** — placing them after the `-c '…'` arg silently makes `os.environ` empty (every field reads absent).
+**BLE discovery & resilience (cross-cutting — also the firmware's side):**
 
-**Discovery & resilience:**
-
-- Connects by name (`"Claude Controller"`) on first run, caches resolved MAC at `~/.config/claude-usage-monitor/ble-address`. ESP32 BLE addresses are factory-burned per-chip, so swapping any board invalidates the cache.
-- On connect failure: cache is dropped AND device is removed from bluez (`bluetoothctl remove`) so the next scan won't re-pick a dead MAC. Multi-candidate scans pick `head -1` and let the failure cycle converge.
-- `POLL_INTERVAL=300`, `TICK=5`, `POLL_FAIL_BACKOFF=60`. Inner loop wakes every 5s to detect disconnects fast; polls Anthropic when 300s elapsed OR when ESP fires a refresh request. A failed/throttled poll backs off `POLL_FAIL_BACKOFF` (not the full interval, not every tick) so it recovers fast without storming the rate-limited endpoint.
+- Connects by name (`"Claude Controller"`) on first run, caches the resolved address at `~/.config/claude-usage-monitor/ble-address` (a BlueZ MAC on Linux, a CoreBluetooth UUID on macOS). ESP32 BLE addresses are factory-burned per-chip, so swapping any board invalidates the cache.
+- On connect failure the cache is dropped. On Linux the daemon additionally removes the device from BlueZ (`bluetoothctl remove`) so the next scan won't re-pick a dead MAC, and multi-candidate scans pick `head -1` and let the failure cycle converge.
 
 **GATT characteristics on service `4c41555a-...0001`:**
 
