@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "splash.h"
 #include <lvgl.h>
+#include <time.h>
 #include "logos.h"
 #include "icons.h"
 #include "hal/board_caps.h"
@@ -676,7 +677,7 @@ screen_t ui_get_current_screen(void) {
 }
 
 void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip,
-                           int rssi, uint32_t last_update_ms) {
+                           int rssi, uint32_t last_update_ms, daemon_health_t daemon_health) {
     // Status label + color
     switch (state) {
     case NET_ONLINE:
@@ -702,43 +703,53 @@ void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip,
     else
         lv_label_set_text(lbl_wifi_rssi, "Signal: ---");
 
-    // Age of the last good GET, computed once and shared by the daemon-health
-    // verdict and the "Updated: …" line below. 0 means "never fetched".
-    uint32_t age_ms = (last_update_ms == 0) ? 0 : (millis() - last_update_ms);
-
-    // Daemon reachability — inferred from whether a good GET has landed and how
-    // stale it is. Distinguishes "WiFi up but daemon unreachable" (the common
-    // failure: daemon down, wrong host, or mDNS not resolving) from a healthy link.
-    // The 120 s threshold is ~2.7× the 45 s device fetch interval (FETCH_INTERVAL_MS),
-    // so it trips only after ~3 missed fetches — not on normal inter-fetch quiet.
-    {
-        if (state != NET_ONLINE) {
-            lv_label_set_text(lbl_wifi_daemon, "Daemon: ---");
-            lv_obj_set_style_text_color(lbl_wifi_daemon, COL_DIM, 0);
-        } else if (last_update_ms == 0) {
-            // No good /usage body yet. Covers both "daemon unreachable" and
-            // "daemon up but still returning 503 {no data yet}" — we can't tell
-            // them apart from last_update_ms alone, so don't claim "no response".
-            lv_label_set_text(lbl_wifi_daemon, "Daemon: no data");
-            lv_obj_set_style_text_color(lbl_wifi_daemon, COL_RED, 0);
-        } else if (age_ms <= 120000UL) {
-            lv_label_set_text(lbl_wifi_daemon, "Daemon: connected");
-            lv_obj_set_style_text_color(lbl_wifi_daemon, COL_GREEN, 0);
-        } else {
-            lv_label_set_text(lbl_wifi_daemon, "Daemon: stale");
-            lv_obj_set_style_text_color(lbl_wifi_daemon, COL_AMBER, 0);
-        }
+    // Daemon reachability — a derived verdict (net_daemon_health) that the caller
+    // re-evaluates over time and only repaints on a transition. Distinguishes
+    // "WiFi up but daemon unreachable" (daemon down, wrong host, mDNS not
+    // resolving) from a healthy link. "no data" (not "no response") for the
+    // never-fetched case: a reachable daemon returns 503 before its first
+    // upstream poll, indistinguishable from unreachable by age alone.
+    switch (daemon_health) {
+    case DAEMON_OFFLINE:
+        lv_label_set_text(lbl_wifi_daemon, "Daemon: ---");
+        lv_obj_set_style_text_color(lbl_wifi_daemon, COL_DIM, 0);
+        break;
+    case DAEMON_NO_DATA:
+        lv_label_set_text(lbl_wifi_daemon, "Daemon: no data");
+        lv_obj_set_style_text_color(lbl_wifi_daemon, COL_RED, 0);
+        break;
+    case DAEMON_CONNECTED:
+        lv_label_set_text(lbl_wifi_daemon, "Daemon: connected");
+        lv_obj_set_style_text_color(lbl_wifi_daemon, COL_GREEN, 0);
+        break;
+    case DAEMON_STALE:
+        lv_label_set_text(lbl_wifi_daemon, "Daemon: stale");
+        lv_obj_set_style_text_color(lbl_wifi_daemon, COL_AMBER, 0);
+        break;
     }
 
-    // Last-update age
-    if (last_update_ms == 0) {
+    // Last-update wall-clock time. The device has no RTC: NTP sets the clock a
+    // few seconds after WiFi associates. Rather than storing the epoch at fetch
+    // time (which is pre-sync garbage if the first GET beats NTP), reconstruct
+    // the fetch instant from the always-valid monotonic age: now - age. This is
+    // stable across repaints and self-heals once the clock syncs, even for a
+    // GET that landed before the sync. Em-dash until we have both a fetch and a
+    // synced clock (NTP_SYNCED_EPOCH_MIN = 2023-11-14, a "clock is plausibly
+    // real" floor — unsynced newlib starts at 1970).
+    static const time_t NTP_SYNCED_EPOCH_MIN = 1700000000;
+    time_t now = time(nullptr);
+    if (last_update_ms == 0 || now < NTP_SYNCED_EPOCH_MIN) {
         lv_label_set_text(lbl_wifi_age, "Updated: \xe2\x80\x94");
     } else {
-        uint32_t age_s = age_ms / 1000;
-        if (age_s < 60)
-            lv_label_set_text_fmt(lbl_wifi_age, "Updated: %lus ago", (unsigned long)age_s);
-        else
-            lv_label_set_text_fmt(lbl_wifi_age, "Updated: %lum ago", (unsigned long)(age_s / 60));
+        time_t fetched = now - (time_t)((millis() - last_update_ms) / 1000);
+        struct tm tmv;
+        if (localtime_r(&fetched, &tmv) == nullptr) {
+            lv_label_set_text(lbl_wifi_age, "Updated: \xe2\x80\x94");
+        } else {
+            char buf[8];
+            strftime(buf, sizeof(buf), "%H:%M", &tmv);
+            lv_label_set_text_fmt(lbl_wifi_age, "Updated: %s", buf);
+        }
     }
 }
 

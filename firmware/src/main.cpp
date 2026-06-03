@@ -204,7 +204,8 @@ void setup() {
     input_hal_init();
 
     ui_init();
-    ui_update_wifi_status(net_get_state(), net_get_ssid(), net_get_ip(), net_get_rssi(), net_last_update_ms());
+    ui_update_wifi_status(net_get_state(), net_get_ssid(), net_get_ip(), net_get_rssi(),
+                          net_last_update_ms(), net_daemon_health());
     ui_update_battery(power_hal_battery_pct(), power_hal_is_charging());
     ui_show_screen(SCREEN_SPLASH);
 
@@ -212,7 +213,8 @@ void setup() {
         board_caps().name, W, H);
 }
 
-static net_state_t last_net_state = NET_DISCONNECTED;
+static net_state_t     last_net_state     = NET_DISCONNECTED;
+static daemon_health_t last_daemon_health = DAEMON_OFFLINE;
 
 static float max_present_session_pct(const UsageData& u) {
     float m = -1.0f;
@@ -287,23 +289,17 @@ void loop() {
         }
     }
 
-    net_state_t ns = net_get_state();
-    if (ns != last_net_state) {
-        last_net_state = ns;
-        ui_update_wifi_status(ns, net_get_ssid(), net_get_ip(), net_get_rssi(), net_last_update_ms());
-    }
-
-    // The "Updated: Ns ago" / daemon-staleness lines are computed at call time,
-    // so they only advance when this runs. State-change and new-data events are
-    // ~45 s apart — without a periodic tick the age sticks at "0s ago". Refresh
-    // once a second while the WiFi diagnostics screen is the one on display.
-    {
-        static uint32_t last_wifi_tick = 0;
-        uint32_t now = millis();
-        if (ui_get_current_screen() == SCREEN_WIFI && now - last_wifi_tick >= 1000) {
-            last_wifi_tick = now;
-            ui_update_wifi_status(ns, net_get_ssid(), net_get_ip(), net_get_rssi(), net_last_update_ms());
-        }
+    // Repaint the WiFi page on a net-state change OR a daemon-health transition.
+    // net_daemon_health() is elapsed-time based (it flips to "stale" after the
+    // last good GET ages out), so it's polled every loop — but we only touch the
+    // labels when the verdict actually changes, so there's no periodic redraw.
+    net_state_t     ns = net_get_state();
+    daemon_health_t dh = net_daemon_health();
+    if (ns != last_net_state || dh != last_daemon_health) {
+        last_net_state     = ns;
+        last_daemon_health = dh;
+        ui_update_wifi_status(ns, net_get_ssid(), net_get_ip(), net_get_rssi(),
+                              net_last_update_ms(), dh);
     }
 
     static int  last_pct      = -2;
@@ -333,8 +329,14 @@ void loop() {
                 if (splash_is_active()) splash_pick_for_current_rate();
             }
             ui_update(&usage);
-            // Refresh diagnostics display with the latest network state.
-            ui_update_wifi_status(net_get_state(), net_get_ssid(), net_get_ip(), net_get_rssi(), net_last_update_ms());
+            // A fresh GET advances the "Updated" timestamp even when the daemon
+            // verdict is unchanged (still "connected"), so repaint here directly.
+            // Resync the change-detection latches so the transition check above
+            // doesn't repaint again next tick.
+            last_net_state     = net_get_state();
+            last_daemon_health = net_daemon_health();
+            ui_update_wifi_status(last_net_state, net_get_ssid(), net_get_ip(), net_get_rssi(),
+                                  net_last_update_ms(), last_daemon_health);
         }
         // No ack/nack — HTTP pull has no acknowledgement mechanism.
     }

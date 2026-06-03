@@ -4,6 +4,16 @@
 #include <HTTPClient.h>
 #include <ESPmDNS.h>
 
+// NTP defaults — fall back if an older net_config.h (gitignored) predates these
+// keys, so the build doesn't break on a stale config. Real values belong in
+// net_config.h (see net_config.example.h).
+#ifndef NTP_SERVER
+#define NTP_SERVER "pool.ntp.org"
+#endif
+#ifndef NTP_TZ
+#define NTP_TZ "GMT0BST,M3.5.0/1,M10.5.0"  // UK (GMT/BST)
+#endif
+
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
@@ -21,6 +31,11 @@ static char s_ip_buf[20];
 
 // Timestamp (millis()) of the last successful GET; 0 = never
 static uint32_t s_last_update_ms = 0;
+
+// Staleness window for the daemon-health verdict: ~2.7× the 45 s device fetch
+// interval (FETCH_INTERVAL_MS), so it trips only after ~3 missed fetches — not
+// on normal inter-fetch quiet.
+#define DAEMON_STALE_MS 120000UL
 
 // Resolved daemon IP (cached after first mDNS lookup to avoid blocking tick)
 static IPAddress s_daemon_ip;
@@ -151,6 +166,11 @@ void net_tick(void) {
                       WiFi.localIP().toString().c_str());
         s_state = NET_ONLINE;
 
+        // Kick off SNTP so the WiFi page can show a wall-clock "Updated" time.
+        // Non-blocking: the sync runs in the background and lands a few seconds
+        // later (so the first fetch may still predate it — handled in the UI).
+        configTzTime(NTP_TZ, NTP_SERVER);
+
         // Cache diagnostics strings
         strncpy(s_ssid_buf, WiFi.SSID().c_str(), sizeof(s_ssid_buf) - 1);
         s_ssid_buf[sizeof(s_ssid_buf) - 1] = '\0';
@@ -231,4 +251,11 @@ int net_get_rssi(void) {
 
 uint32_t net_last_update_ms(void) {
     return s_last_update_ms;
+}
+
+daemon_health_t net_daemon_health(void) {
+    if (s_state != NET_ONLINE) return DAEMON_OFFLINE;
+    if (s_last_update_ms == 0)  return DAEMON_NO_DATA;
+    if (millis() - s_last_update_ms <= DAEMON_STALE_MS) return DAEMON_CONNECTED;
+    return DAEMON_STALE;
 }
