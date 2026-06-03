@@ -44,17 +44,17 @@ struct Layout {
     const lv_font_t* usage_pill_font;
     const lv_font_t* usage_reset_font;
 
-    // Bluetooth screen
+    // WiFi screen
     int16_t bt_info_panel_h;
-    int16_t bt_reset_zone_h;
     uint16_t bt_icon_scale;  // LVGL image zoom for the status icon (256 = 100%, == LV_SCALE_NONE)
     int16_t bt_status_x;     // x of status text, after the (possibly scaled) icon
     int16_t bt_status_y;     // shared y for the status icon and the status label
     int16_t bt_device_y;
     int16_t bt_mac_y;
+    int16_t bt_rssi_y;
+    int16_t bt_age_y;
     const lv_font_t* bt_status_font;
-    const lv_font_t* bt_device_font;  // also used for the MAC line
-    const lv_font_t* bt_reset_font;
+    const lv_font_t* bt_device_font;  // also used for sub-lines
     const lv_font_t* bt_credit_1_font;
     const lv_font_t* bt_credit_2_font;
 };
@@ -77,7 +77,6 @@ static void compute_layout(const BoardCaps& c) {
     L.usage_panel_gap  = 16;
     L.usage_pill_font  = &font_styrene_28;
     L.usage_reset_font = &font_styrene_28;
-    L.bt_reset_font    = &font_styrene_28;
 
     if (c.height >= 460) {
         // Large layout — tuned for 480x480 (AMOLED-2.16).
@@ -86,13 +85,14 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_bar_y = 56;
         L.usage_reset_y = 94;
         L.usage_pct_font   = &font_styrene_48;
-        L.bt_info_panel_h = 160;
-        L.bt_reset_zone_h = 110;
+        L.bt_info_panel_h = 200;
         L.bt_icon_scale = 256;   // status icon at native 48px (LV_SCALE_NONE — no transform)
         L.bt_status_x = 56;
         L.bt_status_y = 2;
         L.bt_device_y = 64;
         L.bt_mac_y = 100;
+        L.bt_rssi_y = 136;
+        L.bt_age_y = 166;
         L.bt_status_font   = &font_styrene_48;
         L.bt_device_font   = &font_styrene_28;
         L.bt_credit_1_font = &font_styrene_24;
@@ -100,23 +100,24 @@ static void compute_layout(const BoardCaps& c) {
     } else {
         // Compact layout — tuned for 368x448 (AMOLED-1.8). The panel is only
         // ~7% shorter than the square, so heights/fonts stay close to the
-        // large layout; the title shrinks only because "Bluetooth" at 56px
-        // would overrun the narrower (368px) width. Panels shrink just enough
-        // to keep the two panels + bottom animation fitting in 448px.
+        // large layout; the title shrinks only because "WiFi" at 56px would
+        // overrun the narrower (368px) width. Panel shrinks just enough to
+        // fit all four diagnostic rows + credits at the bottom.
         L.title_font       = &font_tiempos_34;
         L.usage_panel_h = 134;
         L.usage_bar_y = 48;
         L.usage_reset_y = 78;    // ends ~2px above the panel content bottom (clearance for descenders)
         L.usage_pct_font   = &font_styrene_36;   // headline %, a step down from 48 so the row breathes
-        L.bt_info_panel_h = 150;
-        L.bt_reset_zone_h = 96;
+        L.bt_info_panel_h = 185;
         L.bt_icon_scale = 160;   // scale status icon 48px -> ~30px to match the 28px status text
         L.bt_status_x = 44;
         L.bt_status_y = 4;
-        L.bt_device_y = 58;
-        L.bt_mac_y = 92;
+        L.bt_device_y = 54;
+        L.bt_mac_y = 84;
+        L.bt_rssi_y = 114;
+        L.bt_age_y = 144;
         L.bt_status_font   = &font_styrene_28;
-        L.bt_device_font   = &font_styrene_20;   // device + MAC; 24px overflowed the 296px inner width
+        L.bt_device_font   = &font_styrene_20;   // sub-lines; 24px overflowed the 296px inner width
         L.bt_credit_1_font = &font_styrene_20;
         L.bt_credit_2_font = &font_styrene_16;
     }
@@ -158,11 +159,13 @@ struct ProviderWidgets {
 static ProviderWidgets claude_w;
 static ProviderWidgets codex_w;
 
-// ---- Bluetooth screen widgets ----
-static lv_obj_t* ble_container;
-static lv_obj_t* lbl_ble_status;
-static lv_obj_t* lbl_ble_device;
-static lv_obj_t* lbl_ble_mac;
+// ---- WiFi screen widgets ----
+static lv_obj_t* wifi_container;
+static lv_obj_t* lbl_wifi_status;
+static lv_obj_t* lbl_wifi_ssid;
+static lv_obj_t* lbl_wifi_ip;
+static lv_obj_t* lbl_wifi_rssi;
+static lv_obj_t* lbl_wifi_age;
 
 // ---- Battery indicator (shared, on top) ----
 static lv_obj_t* battery_img;
@@ -253,7 +256,6 @@ static void format_reset_time(int mins, char* buf, size_t len) {
 
 // Forward decls — callbacks defined near ui_show_screen below
 static void global_click_cb(lv_event_t* e);
-static void ble_reset_click_cb(lv_event_t* e);
 
 static lv_obj_t* make_panel(lv_obj_t* parent, int x, int y, int w, int h) {
     lv_obj_t* panel = lv_obj_create(parent);
@@ -274,7 +276,7 @@ static lv_obj_t* make_panel(lv_obj_t* parent, int x, int y, int w, int h) {
 
 // Screen title in the top row. The +16 x-offset centers it horizontally in the
 // gap between the logo (left) and the battery icon (right); the y centers it
-// vertically against the logo. Shared by the usage and bluetooth screens.
+// vertically against the logo. Shared by the usage and wifi screens.
 static lv_obj_t* make_title(lv_obj_t* parent, const char* text) {
     lv_obj_t* lbl = lv_label_create(parent);
     lv_label_set_text(lbl, text);
@@ -392,92 +394,80 @@ static void init_provider_screen(lv_obj_t* scr, const char* title, lv_color_t ac
     lv_obj_align(w->anim, LV_ALIGN_BOTTOM_MID, 0, -12);
 }
 
-// ======== Bluetooth Screen ========
+// ======== WiFi Screen ========
 
-static void init_bluetooth_screen(lv_obj_t* scr) {
-    ble_container = lv_obj_create(scr);
-    lv_obj_set_size(ble_container, L.scr_w, L.scr_h);
-    lv_obj_set_pos(ble_container, 0, 0);
-    lv_obj_set_style_bg_opa(ble_container, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(ble_container, 0, 0);
-    lv_obj_set_style_pad_all(ble_container, 0, 0);
-    lv_obj_clear_flag(ble_container, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(ble_container, global_click_cb, LV_EVENT_CLICKED, NULL);
+static void init_wifi_screen(lv_obj_t* scr) {
+    wifi_container = lv_obj_create(scr);
+    lv_obj_set_size(wifi_container, L.scr_w, L.scr_h);
+    lv_obj_set_pos(wifi_container, 0, 0);
+    lv_obj_set_style_bg_opa(wifi_container, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(wifi_container, 0, 0);
+    lv_obj_set_style_pad_all(wifi_container, 0, 0);
+    lv_obj_clear_flag(wifi_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(wifi_container, global_click_cb, LV_EVENT_CLICKED, NULL);
 
-    make_title(ble_container, "Bluetooth");
+    make_title(wifi_container, "WiFi");
 
-    lv_obj_t* p_info = make_panel(ble_container, L.margin, L.content_y,
+    lv_obj_t* p_info = make_panel(wifi_container, L.margin, L.content_y,
                                   L.content_w, L.bt_info_panel_h);
 
-    static lv_image_dsc_t icon_bt_dsc;
-    init_icon_dsc(&icon_bt_dsc, ICON_BLUETOOTH_W, ICON_BLUETOOTH_H, icon_bluetooth_data);
+    static lv_image_dsc_t icon_wifi_dsc;
+    init_icon_dsc(&icon_wifi_dsc, ICON_WIFI_W, ICON_WIFI_H, icon_wifi_data);
 
-    lv_obj_t* bt_img = lv_image_create(p_info);
-    lv_image_set_src(bt_img, &icon_bt_dsc);
+    lv_obj_t* wifi_img = lv_image_create(p_info);
+    lv_image_set_src(wifi_img, &icon_wifi_dsc);
     // Only scale when the layout actually shrinks the icon (compact). Skipping
     // the call at native size avoids LVGL's per-redraw transform path on the
     // large layout; the compact layout pays it by design to match the 28px text.
     if (L.bt_icon_scale != LV_SCALE_NONE) {
-        lv_image_set_pivot(bt_img, 0, 0);        // scale toward top-left so pos stays predictable
-        lv_image_set_scale(bt_img, L.bt_icon_scale);
+        lv_image_set_pivot(wifi_img, 0, 0);        // scale toward top-left so pos stays predictable
+        lv_image_set_scale(wifi_img, L.bt_icon_scale);
     }
-    lv_obj_set_pos(bt_img, 0, L.bt_status_y);
+    lv_obj_set_pos(wifi_img, 0, L.bt_status_y);
 
-    lbl_ble_status = lv_label_create(p_info);
-    lv_label_set_text(lbl_ble_status, "Initializing...");
-    lv_obj_set_style_text_font(lbl_ble_status, L.bt_status_font, 0);
-    lv_obj_set_style_text_color(lbl_ble_status, COL_DIM, 0);
-    lv_obj_set_pos(lbl_ble_status, L.bt_status_x, L.bt_status_y);
+    lbl_wifi_status = lv_label_create(p_info);
+    lv_label_set_text(lbl_wifi_status, "Connecting\xe2\x80\xa6");
+    lv_obj_set_style_text_font(lbl_wifi_status, L.bt_status_font, 0);
+    lv_obj_set_style_text_color(lbl_wifi_status, COL_DIM, 0);
+    lv_obj_set_pos(lbl_wifi_status, L.bt_status_x, L.bt_status_y);
 
-    lbl_ble_device = lv_label_create(p_info);
-    lv_label_set_text(lbl_ble_device, "Device: ---");
-    lv_obj_set_style_text_font(lbl_ble_device, L.bt_device_font, 0);
-    lv_obj_set_style_text_color(lbl_ble_device, COL_DIM, 0);
-    lv_obj_set_pos(lbl_ble_device, 0, L.bt_device_y);
+    lbl_wifi_ssid = lv_label_create(p_info);
+    lv_label_set_text(lbl_wifi_ssid, "SSID: ---");
+    lv_obj_set_style_text_font(lbl_wifi_ssid, L.bt_device_font, 0);
+    lv_obj_set_style_text_color(lbl_wifi_ssid, COL_DIM, 0);
+    lv_obj_set_pos(lbl_wifi_ssid, 0, L.bt_device_y);
 
-    lbl_ble_mac = lv_label_create(p_info);
-    lv_label_set_text(lbl_ble_mac, "Address: ---");
-    lv_obj_set_style_text_font(lbl_ble_mac, L.bt_device_font, 0);
-    lv_obj_set_style_text_color(lbl_ble_mac, COL_DIM, 0);
-    lv_obj_set_pos(lbl_ble_mac, 0, L.bt_mac_y);
+    lbl_wifi_ip = lv_label_create(p_info);
+    lv_label_set_text(lbl_wifi_ip, "IP: ---");
+    lv_obj_set_style_text_font(lbl_wifi_ip, L.bt_device_font, 0);
+    lv_obj_set_style_text_color(lbl_wifi_ip, COL_DIM, 0);
+    lv_obj_set_pos(lbl_wifi_ip, 0, L.bt_mac_y);
 
-    int reset_y = L.content_y + L.bt_info_panel_h + 16;
-    lv_obj_t* reset_zone = lv_obj_create(ble_container);
-    lv_obj_set_pos(reset_zone, L.margin, reset_y);
-    lv_obj_set_size(reset_zone, L.content_w, L.bt_reset_zone_h);
-    lv_obj_set_style_bg_color(reset_zone, COL_PANEL, 0);
-    lv_obj_set_style_bg_opa(reset_zone, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(reset_zone, 8, 0);
-    lv_obj_set_style_border_width(reset_zone, 0, 0);
-    lv_obj_set_style_pad_column(reset_zone, 14, 0);
-    lv_obj_set_flex_flow(reset_zone, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(reset_zone, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(reset_zone, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(reset_zone, ble_reset_click_cb, LV_EVENT_CLICKED, NULL);
+    lbl_wifi_rssi = lv_label_create(p_info);
+    lv_label_set_text(lbl_wifi_rssi, "Signal: ---");
+    lv_obj_set_style_text_font(lbl_wifi_rssi, L.bt_device_font, 0);
+    lv_obj_set_style_text_color(lbl_wifi_rssi, COL_DIM, 0);
+    lv_obj_set_pos(lbl_wifi_rssi, 0, L.bt_rssi_y);
 
-    static lv_image_dsc_t icon_trash_dsc;
-    init_icon_dsc(&icon_trash_dsc, ICON_TRASH2_W, ICON_TRASH2_H, icon_trash2_data);
-    lv_obj_t* trash_img = lv_image_create(reset_zone);
-    lv_image_set_src(trash_img, &icon_trash_dsc);
+    lbl_wifi_age = lv_label_create(p_info);
+    lv_label_set_text(lbl_wifi_age, "Updated: \xe2\x80\x94");
+    lv_obj_set_style_text_font(lbl_wifi_age, L.bt_device_font, 0);
+    lv_obj_set_style_text_color(lbl_wifi_age, COL_DIM, 0);
+    lv_obj_set_pos(lbl_wifi_age, 0, L.bt_age_y);
 
-    lv_obj_t* reset_lbl = lv_label_create(reset_zone);
-    lv_label_set_text(reset_lbl, "Reset Bluetooth");
-    lv_obj_set_style_text_font(reset_lbl, L.bt_reset_font, 0);
-    lv_obj_set_style_text_color(reset_lbl, COL_DIM, 0);
-
-    lv_obj_t* lbl_credit = lv_label_create(ble_container);
+    lv_obj_t* lbl_credit = lv_label_create(wifi_container);
     lv_label_set_text(lbl_credit, "Built by @hermannbjorgvin");
     lv_obj_set_style_text_font(lbl_credit, L.bt_credit_1_font, 0);
     lv_obj_set_style_text_color(lbl_credit, COL_DIM, 0);
     lv_obj_align(lbl_credit, LV_ALIGN_BOTTOM_MID, 0, -46);
 
-    lv_obj_t* lbl_credit2 = lv_label_create(ble_container);
+    lv_obj_t* lbl_credit2 = lv_label_create(wifi_container);
     lv_label_set_text(lbl_credit2, "Clawd animation by @amaanbuilds");
     lv_obj_set_style_text_font(lbl_credit2, L.bt_credit_2_font, 0);
     lv_obj_set_style_text_color(lbl_credit2, COL_DIM, 0);
     lv_obj_align(lbl_credit2, LV_ALIGN_BOTTOM_MID, 0, -20);
 
-    lv_obj_add_flag(ble_container, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(wifi_container, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ======== Public API ========
@@ -496,7 +486,7 @@ void ui_init(void) {
     init_provider_screen(scr, "Claude", COL_ACCENT, &claude_w);
     init_provider_screen(scr, "Codex", COL_ACCENT_CODEX, &codex_w);
     lv_obj_add_flag(codex_w.container, LV_OBJ_FLAG_HIDDEN);
-    init_bluetooth_screen(scr);
+    init_wifi_screen(scr);
     splash_init(scr);
 
     if (splash_get_root()) {
@@ -632,22 +622,17 @@ static void global_click_cb(lv_event_t* e) {
     else                                  ui_show_screen(SCREEN_SPLASH);
 }
 
-static void ble_reset_click_cb(lv_event_t* e) {
-    (void)e;
-    ble_clear_bonds();
-}
-
 void ui_show_screen(screen_t screen) {
     lv_obj_add_flag(claude_w.container, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(codex_w.container, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(ble_container, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(wifi_container, LV_OBJ_FLAG_HIDDEN);
     splash_hide();
 
     switch (screen) {
-    case SCREEN_SPLASH:     splash_show(); break;
-    case SCREEN_USAGE:      lv_obj_clear_flag(claude_w.container, LV_OBJ_FLAG_HIDDEN); break;
-    case SCREEN_CODEX:      lv_obj_clear_flag(codex_w.container, LV_OBJ_FLAG_HIDDEN); break;
-    case SCREEN_BLUETOOTH:  lv_obj_clear_flag(ble_container, LV_OBJ_FLAG_HIDDEN); break;
+    case SCREEN_SPLASH:  splash_show(); break;
+    case SCREEN_USAGE:   lv_obj_clear_flag(claude_w.container, LV_OBJ_FLAG_HIDDEN); break;
+    case SCREEN_CODEX:   lv_obj_clear_flag(codex_w.container, LV_OBJ_FLAG_HIDDEN); break;
+    case SCREEN_WIFI:    lv_obj_clear_flag(wifi_container, LV_OBJ_FLAG_HIDDEN); break;
     default: break;
     }
 
@@ -669,10 +654,10 @@ void ui_show_screen(screen_t screen) {
 void ui_cycle_screen(void) {
     screen_t next;
     switch (current_screen) {
-    case SCREEN_USAGE:      next = SCREEN_CODEX;      break;
-    case SCREEN_CODEX:      next = SCREEN_BLUETOOTH;  break;
-    case SCREEN_BLUETOOTH:  next = SCREEN_USAGE;      break;
-    default:                next = SCREEN_USAGE;      break;
+    case SCREEN_USAGE:  next = SCREEN_CODEX;  break;
+    case SCREEN_CODEX:  next = SCREEN_WIFI;   break;
+    case SCREEN_WIFI:   next = SCREEN_USAGE;  break;
+    default:            next = SCREEN_USAGE;  break;
     }
     ui_show_screen(next);
 }
@@ -686,35 +671,62 @@ screen_t ui_get_current_screen(void) {
     return current_screen;
 }
 
-void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) {
+void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip,
+                           int rssi, uint32_t last_update_ms) {
+    // Status label + color
     switch (state) {
-    case BLE_STATE_CONNECTED:
-        lv_label_set_text(lbl_ble_status, "Connected");
-        lv_obj_set_style_text_color(lbl_ble_status, COL_GREEN, 0);
+    case NET_ONLINE:
+        lv_label_set_text(lbl_wifi_status, "Connected");
+        lv_obj_set_style_text_color(lbl_wifi_status, COL_GREEN, 0);
         break;
-    case BLE_STATE_ADVERTISING:
-        lv_label_set_text(lbl_ble_status, "Advertising...");
-        lv_obj_set_style_text_color(lbl_ble_status, COL_AMBER, 0);
+    case NET_CONNECTING:
+        lv_label_set_text(lbl_wifi_status, "Connecting\xe2\x80\xa6");
+        lv_obj_set_style_text_color(lbl_wifi_status, COL_AMBER, 0);
         break;
-    case BLE_STATE_DISCONNECTED:
-        lv_label_set_text(lbl_ble_status, "Disconnected");
-        lv_obj_set_style_text_color(lbl_ble_status, COL_RED, 0);
-        break;
+    case NET_DISCONNECTED:
     default:
-        lv_label_set_text(lbl_ble_status, "Initializing...");
-        lv_obj_set_style_text_color(lbl_ble_status, COL_DIM, 0);
+        lv_label_set_text(lbl_wifi_status, "Offline");
+        lv_obj_set_style_text_color(lbl_wifi_status, COL_RED, 0);
         break;
     }
 
-    if (name) {
-        static char nbuf[48];
-        snprintf(nbuf, sizeof(nbuf), "Device: %s", name);
-        lv_label_set_text(lbl_ble_device, nbuf);
+    // SSID
+    {
+        static char sbuf[64];
+        snprintf(sbuf, sizeof(sbuf), "SSID: %s", (ssid && *ssid) ? ssid : "---");
+        lv_label_set_text(lbl_wifi_ssid, sbuf);
     }
-    if (mac) {
-        static char mbuf[48];
-        snprintf(mbuf, sizeof(mbuf), "Address: %s", mac);
-        lv_label_set_text(lbl_ble_mac, mbuf);
+
+    // IP
+    {
+        static char ibuf[48];
+        snprintf(ibuf, sizeof(ibuf), "IP: %s", (ip && *ip) ? ip : "---");
+        lv_label_set_text(lbl_wifi_ip, ibuf);
+    }
+
+    // RSSI
+    {
+        static char rbuf[32];
+        if (state == NET_ONLINE)
+            snprintf(rbuf, sizeof(rbuf), "Signal: %d dBm", rssi);
+        else
+            snprintf(rbuf, sizeof(rbuf), "Signal: ---");
+        lv_label_set_text(lbl_wifi_rssi, rbuf);
+    }
+
+    // Last-update age
+    {
+        static char abuf[48];
+        if (last_update_ms == 0) {
+            snprintf(abuf, sizeof(abuf), "Updated: \xe2\x80\x94");
+        } else {
+            uint32_t age_s = (millis() - last_update_ms) / 1000;
+            if (age_s < 60)
+                snprintf(abuf, sizeof(abuf), "Updated: %lus ago", (unsigned long)age_s);
+            else
+                snprintf(abuf, sizeof(abuf), "Updated: %lum ago", (unsigned long)(age_s / 60));
+        }
+        lv_label_set_text(lbl_wifi_age, abuf);
     }
 }
 

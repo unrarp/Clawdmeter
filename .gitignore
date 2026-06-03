@@ -1,5 +1,5 @@
-# PlatformIO build artifacts
-firmware/.pio/
+# PlatformIO build artifacts (any .pio/ at any depth — incl. firmware/tools/*)
+.pio/
 firmware/.vscode/
 
 # OS
@@ -12,6 +12,10 @@ firmware/.vscode/
 # Node tooling deps (npm install --no-save)
 tools/node_modules/
 tools/package-lock.json
+
+# WiFi/daemon-host secrets — keep local, never commit
+firmware/tools/mdns_spike/include/spike_config.h
+firmware/src/net_config.h
 
 # Mac daemon venv
 daemon/.venv/

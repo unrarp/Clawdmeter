@@ -13,7 +13,7 @@ Two reference ports today:
 
 The shared code calls a small HAL (`firmware/src/hal/`) that each board implements: display, touch, input, power, IMU. Optional features are guarded by `BoardCaps` (runtime) and `BOARD_HAS_*` (compile-time) rather than `#ifdef BOARD_*`.
 
-Connects to a host daemon over BLE; the daemon polls the Anthropic (Claude) and OpenAI (Codex) usage APIs and pushes a combined snapshot. This file is for future Claude Code sessions to bootstrap quickly. Read this first.
+Connects to a host daemon over WiFi/HTTP; the device polls `GET http://<daemon-host>:8080/usage` (every ~45 s) and the daemon caches the latest combined snapshot from the Anthropic (Claude) and OpenAI (Codex) usage APIs. This file is for future Claude Code sessions to bootstrap quickly. Read this first.
 
 ## Hardware (critical pins)
 
@@ -22,7 +22,7 @@ Connects to a host daemon over BLE; the daemon polls the Anthropic (Claude) and 
 - Touch: **CST9220** via I2C (SDA=15, SCL=14, INT=11, addr=0x5A)
 - PMU: **AXP2101** on same I2C bus (addr=0x34) — battery, USB VBUS, PWR button IRQ
 - IMU: **QMI8658** on same I2C bus (addr=0x6B) — accelerometer for auto-rotation
-- Buttons: GPIO 0 (left → Space/voice-mode), GPIO 18 (right → Shift+Tab/mode-toggle), AXP PKEY (middle → cycle screens; on splash → cycle animations)
+- Buttons: GPIO 0 (left → force immediate `/usage` refresh via `net_request_refresh()`), GPIO 18 (right — currently unused/reserved), AXP PKEY (middle → cycle screens; on splash → cycle animations)
 
 ### AMOLED-1.8 (newer port)
 - Display: **SH8601** AMOLED via QSPI (CS=12, **SCLK=11** ← different!, SDIO0..3=4..7, RST routed via XCA9554 EXIO1)
@@ -31,7 +31,7 @@ Connects to a host daemon over BLE; the daemon polls the Anthropic (Claude) and 
 - IMU: QMI8658 @ 0x6B (same chip — initialized for I2C bus health, rotation logic disabled)
 - IO expander: **XCA9554 / PCA9554** @ I2C 0x20. Gates LCD_RST, TP_RST, audio amp enable, and reads the PWR button. **`io_expander_init()` MUST run before `gfx->begin()` or `ft3168_init()`** — otherwise display/touch stay in reset and silently fail. PWR button is on EXIO4, active HIGH (verified empirically with the deleted `iox` serial debug command).
 - Orientation: **fixed at 0°**. IMU auto-rotation is disabled; `rotate_strip()` / `handle_rotation_change()` are excluded via `#ifndef BOARD_AMOLED_18`.
-- Buttons: GPIO 0 (BOOT → Space/voice-mode), XCA9554 EXIO4 (PWR → cycle screens; on splash → cycle animations). **No third button** (GPIO 18 button doesn't exist on this board).
+- Buttons: GPIO 0 (BOOT → force immediate `/usage` refresh via `net_request_refresh()`), XCA9554 EXIO4 (PWR → cycle screens; on splash → cycle animations). **No third button** (GPIO 18 button doesn't exist on this board).
 
 ## Architecture
 
@@ -42,7 +42,7 @@ firmware/src/
   main.cpp        — setup()/loop(): HAL calls only
   ui.{h,cpp}      — responsive 4-screen UI; compute_layout() drives fonts/positions off board_caps()
   splash.{h,cpp}  — 20×20 pixel-art engine
-  ble.{h,cpp}     — NimBLE peripheral: custom data service + HID keyboard
+  net.{h,cpp}     — WiFi STA + HTTPClient GET; resolves daemon via mDNS, fetches /usage every ~45 s
   data.h          — UsageData struct (Claude + Codex fields)
   splash_animations.h — generated, do not hand-edit
 ```
@@ -71,7 +71,7 @@ Device path differs by OS: `/dev/cu.usbmodem*` on macOS, `/dev/ttyACM0` on Linux
 
 The firmware ships a `screenshot` serial command that dumps the LVGL framebuffer. `./screenshot.sh out.png [port]` captures a PNG sized to the active display (480×480 or 368×448). **Use this on every UI iteration** — Read the PNG with the Read tool, verify the change visually, iterate. Script auto-picks the macOS/Linux default port and falls back to pio's bundled Python if pyserial isn't on the system Python.
 
-The boot screen is `SCREEN_SPLASH` and only advances on a physical button press, so a fresh flash will sit on the splash. To screenshot the screen you're actually editing without asking the user to press a button, **temporarily change the default boot screen** in `main.cpp` (search for `ui_show_screen(SCREEN_SPLASH);`) to `SCREEN_USAGE` / `SCREEN_CODEX` / `SCREEN_BLUETOOTH`, do your iteration, then revert before committing. (`screenshot.sh` shells out to `ffmpeg` for the raw→PNG step — if it's not installed the capture succeeds but conversion fails; decode the raw RGB565LE yourself or install ffmpeg.)
+The boot screen is `SCREEN_SPLASH` and only advances on a physical button press, so a fresh flash will sit on the splash. To screenshot the screen you're actually editing without asking the user to press a button, **temporarily change the default boot screen** in `main.cpp` (search for `ui_show_screen(SCREEN_SPLASH);`) to `SCREEN_USAGE` / `SCREEN_CODEX` / `SCREEN_WIFI`, do your iteration, then revert before committing. (`screenshot.sh` shells out to `ffmpeg` for the raw→PNG step — if it's not installed the capture succeeds but conversion fails; decode the raw RGB565LE yourself or install ffmpeg.)
 
 ## Critical gotchas
 
@@ -99,20 +99,11 @@ See `~/.claude/projects/.../memory/` files for persistent context (user is an em
 
 ## Daemon / host side
 
-Bash daemon (`daemon/claude-usage-daemon.sh`, Linux) + macOS Python port (`daemon/claude_usage_daemon.py`) poll **two** providers — Anthropic (Claude) and OpenAI (Codex) — and push one combined JSON snapshot over BLE GATT. `systemctl --user start claude-usage-daemon`. **All daemon implementation rules — API field-mapping, the 14-key wire format, poll constants (300s/5s tick/60s backoff), token handling, and the presence/cache/env-var foot-guns — live in [`.claude/rules/daemon.md`](.claude/rules/daemon.md)** (auto-loads when editing `daemon/**`; read it manually if you touch the firmware JSON parser or `data.h`) and `docs/decisions/2026-06-02-api-oauth-usage-rate-limit.md`.
+Single cross-platform Python daemon (`daemon/claude_usage_daemon.py`, Linux + macOS) polls **two** providers — Anthropic (Claude) and OpenAI (Codex) — and serves the latest combined snapshot as JSON over HTTP. The device fetches `GET http://<daemon-host>:8080/usage` on the LAN; daemon binds `0.0.0.0:8080`, no auth, plain HTTP (trusted LAN only). `systemctl --user start claude-usage-daemon`. **All daemon implementation rules — API field-mapping, the 14-key wire format, poll constants (300s/5s tick/60s backoff), token handling, and the presence/cache/env-var foot-guns — live in [`.claude/rules/daemon.md`](.claude/rules/daemon.md)** (auto-loads when editing `daemon/**`; read it manually if you touch the firmware JSON parser or `data.h`) and `docs/decisions/2026-06-02-api-oauth-usage-rate-limit.md`.
+
+**WiFi / mDNS model:** The device is a WiFi STA; it resolves the daemon host as `<hostname>.local` via mDNS (`WiFi.hostByName()`). No pairing, no MAC cache. Creds + daemon host/port live in `firmware/src/net_config.h` (gitignored; see committed `net_config.example.h` template — real creds are never committed). `install.sh` / `install-mac.sh` set up a venv with `httpx` only — no bluetooth prereqs.
 
 **Operating foot-guns:**
 
-- The unit's `ExecStart` is the script's absolute path — repoint it when switching between the worktree and the main checkout.
-- The daemon is a long-running `while` loop: editing the script changes nothing until `systemctl --user restart` — the old logic stays resident (this is how you get a stale daemon silently emitting the old wire format).
-
-**BLE discovery & resilience (cross-cutting — also the firmware's side):**
-
-- Connects by name (`"Claude Controller"`) on first run, caches the resolved address at `~/.config/claude-usage-monitor/ble-address` (a BlueZ MAC on Linux, a CoreBluetooth UUID on macOS). ESP32 BLE addresses are factory-burned per-chip, so swapping any board invalidates the cache.
-- On connect failure the cache is dropped. On Linux the daemon additionally removes the device from BlueZ (`bluetoothctl remove`) so the next scan won't re-pick a dead MAC, and multi-candidate scans pick `head -1` and let the failure cycle converge.
-
-**GATT characteristics on service `4c41555a-...0001`:**
-
-- `...0002` RX — daemon writes JSON usage payload here.
-- `...0003` TX — firmware notifies ack/nack (daemon doesn't subscribe).
-- `...0004` REQ — firmware fires `0x01` notify in `onSubscribe` if `has_received_data` is false. Daemon subscribes via `setsid bash -c "stdbuf -oL dbus-monitor … | awk …"`; awk drops a flag file the inner loop picks up. See the `feedback_dbus_monitor_pipe` memory for the three subtle gotchas (pipe buffering, busctl-exits race, `wait` blocking on pipeline jobs).
+- The unit's `ExecStart` points to the venv Python + `daemon/claude_usage_daemon.py` absolute path — repoint it when switching between the worktree and the main checkout.
+- The daemon is a long-running `while` loop: editing the script changes nothing until `systemctl --user restart` — the old logic stays resident (this is how you get a stale daemon silently serving the old wire format).

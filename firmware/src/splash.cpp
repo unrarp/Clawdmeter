@@ -109,7 +109,7 @@ void splash_init(lv_obj_t *parent) {
 #else
     // Without PSRAM the full 480×480 RGB565 canvas (460 KB) won't fit. Cap
     // the canvas so the buffer stays under ~80 KB, leaving the rest of
-    // internal SRAM free for LVGL, NimBLE, and the audio/PMU stacks. The
+    // internal SRAM free for LVGL and the audio/PMU stacks. The
     // canvas is centered, so the cost is extra black border around the
     // pixel art — not cropping.
     const uint32_t canvas_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;

@@ -6,7 +6,7 @@
 
 #include "data.h"
 #include "ui.h"
-#include "ble.h"
+#include "net.h"
 #include "splash.h"
 #include "usage_rate.h"
 #include "idle.h"
@@ -222,19 +222,19 @@ void setup() {
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, my_touch_cb);
 
-    ble_init();
+    net_init();
     input_hal_init();
 
     ui_init();
-    ui_update_ble_status(ble_get_state(), ble_get_device_name(), ble_get_mac_address());
+    ui_update_wifi_status(net_get_state(), net_get_ssid(), net_get_ip(), net_get_rssi(), net_last_update_ms());
     ui_update_battery(power_hal_battery_pct(), power_hal_is_charging());
     ui_show_screen(SCREEN_SPLASH);
 
-    Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on BLE...\n",
+    Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on WiFi...\n",
         board_caps().name, W, H);
 }
 
-static ble_state_t last_ble_state = BLE_STATE_INIT;
+static net_state_t last_net_state = NET_DISCONNECTED;
 
 static float max_present_session_pct(const UsageData& u) {
     float m = -1.0f;
@@ -247,7 +247,7 @@ void loop() {
     idle_tick();
     lv_timer_handler();
     ui_tick_anim();
-    ble_tick();
+    net_tick();
     power_hal_tick();
     imu_hal_tick();
     splash_tick();
@@ -257,13 +257,16 @@ void loop() {
     if (!idle_is_asleep()) display_hal_tick();
 
     // ---- Physical buttons ----
-    //   PRIMARY   → HID Space  (Claude Code voice-mode PTT)
-    //   SECONDARY → HID Shift+Tab  (mode toggle; only if the board has one)
+    //   PRIMARY   → wake-only (first press); local activity on subsequent presses
+    //   SECONDARY → wake-only (first press); local activity on subsequent presses
+    //               (only if the board has a secondary button)
     //   PWR       → cycle screens; on splash, cycle animations
     // First press from sleep is consumed as a wake-only event by
     // idle_consume_wake_press(); the normal action fires from the second
     // press. Activity bookkeeping happens inside idle_consume_wake_press
     // so no separate idle_note_activity() call is needed here.
+    // Note: HID keyboard emission (BLE) has been removed — the device is a
+    // WiFi-only usage gauge.
     {
         static bool primary_was = false;
         static bool primary_wake_swallowed = false;
@@ -271,10 +274,9 @@ void loop() {
         if (primary_now != primary_was) {
             if (primary_now) {
                 if (idle_consume_wake_press()) primary_wake_swallowed = true;
-                else                            ble_keyboard_press(0x2C, 0);  // HID Space, no mods
+                else net_request_refresh();  // awake press → force an immediate /usage fetch
             } else {
                 if (primary_wake_swallowed) primary_wake_swallowed = false;
-                else                        ble_keyboard_release();
             }
             primary_was = primary_now;
         }
@@ -286,10 +288,9 @@ void loop() {
             if (secondary_now != secondary_was) {
                 if (secondary_now) {
                     if (idle_consume_wake_press()) secondary_wake_swallowed = true;
-                    else                            ble_keyboard_press(0x2B, 0x02);  // HID Tab + LEFT_SHIFT
+                    // No HID action — device is a WiFi gauge only.
                 } else {
                     if (secondary_wake_swallowed) secondary_wake_swallowed = false;
-                    else                          ble_keyboard_release();
                 }
                 secondary_was = secondary_now;
             }
@@ -303,10 +304,10 @@ void loop() {
         }
     }
 
-    ble_state_t bs = ble_get_state();
-    if (bs != last_ble_state) {
-        last_ble_state = bs;
-        ui_update_ble_status(bs, ble_get_device_name(), ble_get_mac_address());
+    net_state_t ns = net_get_state();
+    if (ns != last_net_state) {
+        last_net_state = ns;
+        ui_update_wifi_status(ns, net_get_ssid(), net_get_ip(), net_get_rssi(), net_last_update_ms());
     }
 
     static int  last_pct      = -2;
@@ -321,21 +322,22 @@ void loop() {
 
     check_serial_cmd();
 
-    if (ble_has_data()) {
-        if (parse_json(ble_get_data(), &usage)) {
-            int g_before = usage_rate_group();
-            usage_rate_sample(max_present_session_pct(usage));
+    if (net_has_data()) {
+        if (parse_json(net_get_data(), &usage)) {
+            int   g_before  = usage_rate_group();
+            float max_pct   = max_present_session_pct(usage);
+            usage_rate_sample(max_pct);
             int g_after = usage_rate_group();
             if (g_after != g_before) {
                 Serial.printf("usage rate: group %d -> %d (s=%.2f%%)\n",
-                    g_before, g_after, max_present_session_pct(usage));
+                    g_before, g_after, max_pct);
                 if (splash_is_active()) splash_pick_for_current_rate();
             }
             ui_update(&usage);
-            ble_send_ack();
-        } else {
-            ble_send_nack();
+            // Refresh diagnostics display with the latest network state.
+            ui_update_wifi_status(net_get_state(), net_get_ssid(), net_get_ip(), net_get_rssi(), net_last_update_ms());
         }
+        // No ack/nack — HTTP pull has no acknowledgement mechanism.
     }
 
     delay(5);

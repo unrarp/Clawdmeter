@@ -1,12 +1,12 @@
 #pragma once
 #include "data.h"
-#include "ble.h"
+#include "net.h"
 
 enum screen_t {
     SCREEN_SPLASH,
     SCREEN_USAGE,
     SCREEN_CODEX,
-    SCREEN_BLUETOOTH,
+    SCREEN_WIFI,
     SCREEN_COUNT,
 };
 
@@ -17,5 +17,5 @@ void ui_show_screen(screen_t screen);
 void ui_cycle_screen(void);
 void ui_toggle_splash(void);
 screen_t ui_get_current_screen(void);
-void ui_update_ble_status(ble_state_t state, const char* name, const char* mac);
+void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip, int rssi, uint32_t last_update_ms);
 void ui_update_battery(int percent, bool charging);

@@ -1,7 +1,7 @@
 ---
 date: 2026-06-02
 module: daemon, firmware
-status: approved, not started
+status: implemented
 depends-on: 2026-06-02-codex-usage.md (lands first)
 tags: [wifi, transport, ble-removal, http, daemon, ui]
 ---
@@ -49,8 +49,8 @@ on-device TLS, no OAuth, no secret at rest**.
   paint, no benefit here.
 - **WiFi credentials: hardcoded + recompile** for v1 (simplest working version).
   Captive-portal provisioning is a fast-follow (§G).
-- **Wire format unchanged.** The compact JSON the firmware already parses
-  (`{"s","sr","w","wr","st"}`, §C.4 of the daemon) is reused verbatim over HTTP.
+- **Wire format unchanged.** The compact 14-key JSON the firmware already parses
+  (`{"s","sr","w","wr","st","ok","sp","cp","cs","csr","cw","cwr","cst","cok"}`, §C.4 of the daemon) is reused verbatim over HTTP.
   This keeps `parse_json()` and `UsageData` untouched.
 - **Daemon auth: none.** Bind `0.0.0.0`, serve `/usage` unauthenticated on the
   LAN — usage percentages are low-sensitivity and this is a trusted home
@@ -66,8 +66,8 @@ on-device TLS, no OAuth, no secret at rest**.
   `~/.config/claude-usage-monitor/` BLE-MAC-cache dir on install.
 - **Sequencing: lands after Codex** (`2026-06-02-codex-usage.md`). This plan
   assumes the as-built Codex end state — 4 screens (`SPLASH/USAGE/CODEX/WIFI`),
-  the 12-key two-provider wire payload, a **static** cycle (`ui_cycle_screen`:
-  `USAGE → CODEX → BLUETOOTH`; presence flags drive within-page "Connecting…"
+  the 14-key two-provider wire payload, a **static** cycle (`ui_cycle_screen`:
+  `USAGE → CODEX → WIFI`; presence flags drive within-page "Connecting…"
   state and the splash max-%, **not** page hide/show — there is no
   `screen_enabled()`), and the parameterized provider screen
   (`init_provider_screen`/`ui_update_provider`/`claude_w`/`codex_w`). It
@@ -203,8 +203,7 @@ uint32_t    net_last_update_ms(void);    // millis() of last good GET → stalen
 ### C.4 Data path — unchanged
 
 `parse_json()` and the `UsageData` struct (`data.h`) are **not touched** — the
-12-key two-provider wire format Codex produces is just a JSON body, carried over
-HTTP verbatim. Only the *source* swaps (by symbol — Codex is shifting these
+14-key two-provider wire format is just a JSON body, carried over HTTP verbatim. Only the *source* swaps (by symbol — Codex is shifting these
 lines):
 
 - `ble_init()` → `net_init()`
@@ -302,8 +301,8 @@ v1 small.
   `-e waveshare_amoled_18`, `-e waveshare_amoled_216_c6` (BLE deletion and
   NimBLE removal touch all three).
 - **Daemon, standalone first** (per "validate before integration"): run the
-  Python daemon, `curl http://localhost:8080/usage`, confirm the 12-key
-  two-provider JSON matches the pre-WiFi BLE payload byte-for-byte (same
+  Python daemon, `curl http://localhost:8080/usage`, confirm the 14-key
+  two-provider JSON matches the expected payload byte-for-byte (same
   keys/presence/rounding/`st` logic).
 - **Device**: flash, watch serial for WiFi join + first GET; confirm the WiFi
   screen shows SSID/IP and both provider screens (Claude + Codex, presence-gated)

@@ -2,7 +2,7 @@
 
 A small ESP32 dashboard I made for my desk to keep an eye on my Claude Code (and Codex) usage at a glance.
 
-It runs on a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786) plus a few other boards (see [Hardware](#hardware)) and pairs to your computer over Bluetooth. A small host daemon polls your Claude and Codex usage and pushes the session/weekly percentages to the display. The splash screen plays pixel-art Clawd animations that get busier as your usage rate climbs, and the side buttons send Space and Shift+Tab over BLE HID for Claude Code's voice-mode and mode-toggle shortcuts.
+It runs on a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786) plus a few other boards (see [Hardware](#hardware)). The device connects to your WiFi network and pulls usage data from a small host daemon over plain HTTP. The daemon polls your Claude and Codex usage every 5 minutes and caches the result; the display fetches and renders it roughly every 45 seconds. The splash screen plays pixel-art Clawd animations that get busier as your usage rate climbs.
 
 |              Usage meter              |              Clawd animation screen              |
 | :-----------------------------------: | :----------------------------------------------: |
@@ -12,12 +12,12 @@ The Clawd animations come from [claudepix](https://claudepix.vercel.app), [@amaa
 
 ## Screens
 
-The device boots into the splash and stays there until you press the middle (PWR) button, which cycles through the usage screens — Claude, then Codex — and Bluetooth. Tap the screen anywhere (except the Reset zone on the Bluetooth screen) to flip back to the splash; tap again to dismiss it.
+The device boots into the splash and stays there until you press the middle (PWR) button, which cycles through the usage screens — Claude, then Codex — and WiFi. Tap the screen anywhere to flip back to the splash; tap again to dismiss it.
 
-|              Splash               |              Usage              |                Bluetooth                |
-| :-------------------------------: | :-----------------------------: | :-------------------------------------: |
-| ![Splash](screenshots/splash.png) | ![Usage](screenshots/usage.png) | ![Bluetooth](screenshots/bluetooth.png) |
-|   Splash; touch-toggle anytime    | Per-provider session & weekly utilization (Claude / Codex) |    Connection status and bond reset     |
+|              Splash               |              Claude             |              Codex              |              WiFi               |
+| :-------------------------------: | :-----------------------------: | :-----------------------------: | :-----------------------------: |
+| ![Splash](screenshots/amoled_18/splash.png) | ![Claude](screenshots/amoled_18/usage.png) | ![Codex](screenshots/amoled_18/codex.png) | ![WiFi](screenshots/amoled_18/wifi.png) |
+|   Splash; touch-toggle anytime    | Claude session & weekly utilization | Codex session & weekly utilization | Connection diagnostics (SSID / IP / RSSI / data age) |
 
 While the splash is up, the middle button cycles animations instead of screens. The firmware also auto-rotates every 20 s within the current usage-rate group, so a long stretch on the splash isn't just one Clawd on loop.
 
@@ -37,13 +37,27 @@ Boards supported out of the box:
 
 - Linux (tested on Ubuntu) or macOS
 - [PlatformIO CLI](https://docs.platformio.org/en/latest/core/installation/index.html)
-- Linux: `curl`, `bluetoothctl`, `busctl` (BlueZ Bluetooth stack)
-- macOS: `python3` (the installer sets up a venv with `bleak` and `httpx`)
+- `python3` (the installer sets up a venv with `httpx`)
 - Claude Code with an active subscription (and/or the Codex CLI signed in, if you want the Codex screen)
+- The device and the host machine must be on the same WiFi network
 
 ## macOS installation
 
 The macOS host pieces — Python daemon, LaunchAgent, and flash helper — were ported by [Chris Davidson (@lorddavidson)](https://github.com/lorddavidson). Thanks Chris!
+
+### Configure WiFi credentials
+
+Before flashing, copy `firmware/src/net_config.example.h` to `firmware/src/net_config.h` and fill in your network details:
+
+```c
+#define WIFI_SSID      "YourNetwork"
+#define WIFI_PASSWORD  "YourPassword"
+#define DAEMON_HOST    "my-macbook.local"   // your machine's mDNS hostname
+#define DAEMON_PORT    8080
+#define FETCH_INTERVAL_MS  45000
+```
+
+`DAEMON_HOST` is your machine's mDNS hostname (typically `<computer-name>.local`) — no static IP needed.
 
 ### Flash the firmware
 
@@ -54,30 +68,40 @@ The macOS host pieces — Python daemon, LaunchAgent, and flash helper — were 
 
 The board env name is required. Run `./flash-mac.sh` with no args to see the available envs (scraped from `firmware/platformio.ini`).
 
-### Pair the device
-
-After flashing, open **System Settings → Bluetooth** and click *Connect* next to **"Claude Controller"** (the device's BLE name — distinct from the "Clawdmeter" project name). The daemon will discover it on its next scan (~30 s).
-
 ### Install the daemon
 
-The daemon reads your Claude OAuth token from the macOS Keychain (service `Claude Code-credentials`) — and your Codex token from `~/.codex/auth.json` if present — polls usage every 5 minutes, and pushes it to the display over BLE.
+The daemon reads your Claude OAuth token from the macOS Keychain (service `Claude Code-credentials`) — and your Codex token from `~/.codex/auth.json` if present — polls usage every 5 minutes, and serves the result over HTTP on port 8080.
 
 ```bash
 ./install-mac.sh
 ```
 
-The installer creates a Python venv in `daemon/.venv/`, installs `bleak` and `httpx`, renders a LaunchAgent into `~/Library/LaunchAgents/com.user.claude-usage-daemon.plist`, and loads it. The first run is launched interactively so macOS prompts for Bluetooth permission.
+The installer creates a Python venv in `daemon/.venv/`, installs `httpx`, and renders a LaunchAgent into `~/Library/LaunchAgents/com.user.claude-usage-daemon.plist`.
 
 Useful commands:
 
 ```bash
 launchctl list | grep claude-usage                                          # check it's running
-tail -F ~/Library/Logs/claude-usage-daemon.out.log                          # live logs
+tail -F ~/Library/Logs/clawdmeter.stdout.log                                # live logs
 launchctl unload ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist  # stop
 launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # start
 ```
 
 ## Linux installation
+
+### Configure WiFi credentials
+
+Before flashing, copy `firmware/src/net_config.example.h` to `firmware/src/net_config.h` and fill in your network details:
+
+```c
+#define WIFI_SSID      "YourNetwork"
+#define WIFI_PASSWORD  "YourPassword"
+#define DAEMON_HOST    "my-laptop.local"   // your machine's mDNS hostname
+#define DAEMON_PORT    8080
+#define FETCH_INTERVAL_MS  45000
+```
+
+`DAEMON_HOST` is your machine's mDNS hostname (typically `<computer-name>.local`) — no static IP needed.
 
 ### Flash the firmware
 
@@ -88,24 +112,9 @@ launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # st
 
 The board env name is required. Run `./flash.sh` with no args to see the available envs (scraped from `firmware/platformio.ini`).
 
-### Pair the device
-
-After flashing, the device advertises as **"Claude Controller"**. Pair it once:
-
-```bash
-# Scan for the device
-bluetoothctl scan le
-
-# When "Claude Controller" appears, pair and trust it
-bluetoothctl pair F4:12:FA:C0:8F:E5    # use your device's MAC
-bluetoothctl trust F4:12:FA:C0:8F:E5
-```
-
-The MAC address is shown on the Bluetooth screen — press the middle (PWR) button to cycle to it.
-
 ### Install the daemon
 
-The daemon polls your Claude (and Codex, if configured) usage every 5 minutes and sends it to the display over BLE.
+The daemon polls your Claude (and Codex, if configured) usage every 5 minutes and serves the result over HTTP on port 8080. The device fetches it over your local network — no pairing, no Bluetooth.
 
 ```bash
 ./install.sh
@@ -121,35 +130,35 @@ View logs: `journalctl --user -u claude-usage-daemon -f`
 1. The daemon reads your Claude Code OAuth token — from the macOS Keychain (service `Claude Code-credentials`) on macOS, or from `~/.claude/.credentials.json` on Linux — and, if present, your Codex token from `~/.codex/auth.json`.
 2. It polls each provider's read-only usage endpoint — Anthropic's `api.anthropic.com/api/oauth/usage` and OpenAI's Codex `chatgpt.com/backend-api/wham/usage` — every 5 minutes (both are rate-limited).
 3. The session/weekly percentages and reset times come straight out of those JSON responses. Each provider is independently optional — one you haven't set up just shows a "No account" screen rather than disappearing.
-4. The daemon connects to the ESP32 over BLE and writes a JSON payload to the GATT RX characteristic.
-5. The firmware parses it and updates the LVGL dashboard.
-6. The firmware also tracks the rate of change of session % over a 5-minute window and picks splash animations from the matching mood group.
-7. The two side buttons are independent of all of this — they send Space and Shift+Tab as BLE HID keyboard input to the paired host directly.
+4. The daemon caches the latest result and serves it as JSON over HTTP (`GET http://<host>:8080/usage`) on your local network.
+5. The firmware connects to your WiFi network, resolves the daemon host via mDNS (`<hostname>.local`), and fetches the payload roughly every 45 seconds.
+6. `parse_json()` maps the 14-key compact JSON to the `UsageData` struct and the LVGL dashboard repaints.
+7. The firmware also tracks the rate of change of session % over a 5-minute window and picks splash animations from the matching mood group.
 
 ## Physical buttons
 
-The 2.16″ board has three side buttons (the 1.8″ port has only Left/BOOT and Middle/PWR — no right button). Left and right do the same thing on every screen; the middle button is screen-aware. The GPIOs below are for the S3 2.16; pins differ per board (e.g. the C6 2.16 uses GPIO 9/10 for Left/Right).
+The 2.16″ board has three side buttons (the 1.8″ port has only Left/BOOT and Middle/PWR — no right button). The middle button is screen-aware; the left button forces an immediate data refresh; the right is unused. The GPIOs below are for the S3 2.16; pins differ per board (e.g. the C6 2.16 uses GPIO 9/10 for Left/Right).
 
-| Button           | GPIO         | Function                                                          |
-| ---------------- | ------------ | ----------------------------------------------------------------- |
-| **Left**         | GPIO 0       | Hold to send Space (Claude Code voice-mode push-to-talk)          |
-| **Middle** (PWR) | AXP2101 PKEY | Cycle screens (Claude → Codex → Bluetooth); on splash, cycle anims |
-| **Right**        | GPIO 18      | Press to send Shift+Tab (Claude Code mode toggle)                 |
+| Button           | GPIO         | Function                                                       |
+| ---------------- | ------------ | -------------------------------------------------------------- |
+| **Left**         | GPIO 0       | Force an immediate `/usage` refresh                            |
+| **Middle** (PWR) | AXP2101 PKEY | Cycle screens (Claude → Codex → WiFi); on splash, cycle anims  |
+| **Right**        | GPIO 18      | Currently unused                                               |
 
-Space and Shift+Tab go out as standard BLE HID keyboard reports, so they trigger in whatever window has focus on the paired host — not just Claude Code.
+HID keyboard output (Space / Shift+Tab) has been removed along with Bluetooth. The physical buttons retain only their local screen-cycling roles.
 
-## BLE protocol
+## HTTP protocol
 
-The device advertises a custom GATT service alongside the standard HID keyboard service:
+The daemon exposes a single HTTP endpoint:
 
-|                            | UUID                                   |
-| -------------------------- | -------------------------------------- |
-| **Data Service**           | `4c41555a-4465-7669-6365-000000000001` |
-| RX Characteristic (write)  | `4c41555a-4465-7669-6365-000000000002` |
-| TX Characteristic (notify) | `4c41555a-4465-7669-6365-000000000003` |
-| **HID Service**            | `00001812-0000-1000-8000-00805f9b34fb` |
+| Endpoint      | Method | Description                              |
+| ------------- | ------ | ---------------------------------------- |
+| `/usage`      | GET    | Latest 14-key usage JSON (`200`) or `503` if no poll has succeeded yet |
+| `/healthz`    | GET    | Daemon liveness check                    |
 
-JSON payload format (written to RX):
+The daemon binds to `0.0.0.0:8080` (unauthenticated — trusted home LAN). The device resolves it via mDNS as `<hostname>.local`.
+
+JSON payload format:
 
 ```json
 { "s": 45, "sr": 120, "w": 28, "wr": 7200, "st": "allowed", "ok": true,
@@ -157,7 +166,7 @@ JSON payload format (written to RX):
   "cs": 32, "csr": 90, "cw": 15, "cwr": 5400, "cst": "allowed", "cok": true }
 ```
 
-Fields (Claude): `s` = session %, `sr` = session reset (minutes), `w` = weekly %, `wr` = weekly reset (minutes), `st` = status, `ok` = success flag. `sp` / `cp` = Claude / Codex account present (booleans). Codex mirrors Claude with a `c` prefix: `cs`, `csr`, `cw`, `cwr`, `cst`, `cok`. The daemon always writes all 14 keys; each provider has its own success flag (`ok` for Claude, `cok` for Codex), so a present-but-failing provider keeps its last-good numbers with that flag `false` while the other panel stays live.
+Fields (Claude): `s` = session %, `sr` = session reset (minutes), `w` = weekly %, `wr` = weekly reset (minutes), `st` = status, `ok` = success flag. `sp` / `cp` = Claude / Codex account present (booleans). Codex mirrors Claude with a `c` prefix: `cs`, `csr`, `cw`, `cwr`, `cst`, `cok`. The daemon always serves all 14 keys; each provider has its own success flag (`ok` for Claude, `cok` for Codex), so a present-but-failing provider keeps its last-good numbers with that flag `false` while the other panel stays live.
 
 ## Development
 
@@ -219,10 +228,10 @@ renders as empty boxes.
 
 ### Converting Lucide icons
 
-The UI uses a small set of [Lucide](https://lucide.dev) icons (bluetooth + battery states) converted to RGB565 / RGB565A8 C arrays for LVGL.
+The UI uses a small set of [Lucide](https://lucide.dev) icons (wifi + battery states) converted to RGB565 / RGB565A8 C arrays for LVGL.
 
 ```bash
-node tools/png_to_lvgl.js assets/icon_bluetooth_48.png icon_bluetooth_data ICON_BLUETOOTH_WIDTH ICON_BLUETOOTH_HEIGHT
+node tools/png_to_lvgl.js assets/icon_wifi_48.png icon_wifi_data ICON_WIFI_WIDTH ICON_WIFI_HEIGHT
 ```
 
 Default tint is white (`0xFFFFFF`); Lucide PNGs ship as black-on-transparent and would render invisible against the dark UI without it. Pass `--no-tint` for pre-coloured artwork like the logo. Battery icons use RGB565A8 (alpha plane) so they blend cleanly over the splash; the rest are baked RGB565 over the panel colour. Paste the converter output into `firmware/src/icons.h`.
@@ -248,7 +257,7 @@ See `tools/README.md` for details.
 ## Credits
 
 - Pixel-art Clawd animation by [@amaanbuilds](https://x.com/amaanbuilds), sourced from [claudepix.vercel.app](https://claudepix.vercel.app). Frame data and palettes scraped + converted by the tooling in `tools/`.
-- Lucide icon set ([lucide.dev](https://lucide.dev), MIT) for bluetooth and battery UI glyphs.
+- Lucide icon set ([lucide.dev](https://lucide.dev), MIT) for wifi and battery UI glyphs.
 - Anthropic brand fonts (Tiempos Text, Styrene B) — see licensing warning below.
 
 ## Licensing gray area warning
