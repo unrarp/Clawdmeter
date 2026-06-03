@@ -577,16 +577,13 @@ static void ui_update_provider(ProviderWidgets* w,
 
 void ui_update(const UsageData* data) {
     if (!data->valid) return;
-    ui_update_provider(&claude_w,
-                       data->session_pct,       data->session_reset_mins,
-                       data->weekly_pct,        data->weekly_reset_mins,
-                       data->claude_present,    data->ok,
-                       "No Claude account");
-    ui_update_provider(&codex_w,
-                       data->codex_session_pct,       data->codex_session_reset_mins,
-                       data->codex_weekly_pct,        data->codex_weekly_reset_mins,
-                       data->codex_present,           data->codex_ok,
-                       "No OpenAI account");
+    static ProviderWidgets* const PROVIDER_WIDGETS[PROVIDER_COUNT] = { &claude_w, &codex_w };
+    static const char* const ABSENT_MSG[PROVIDER_COUNT] = { "No Claude account", "No OpenAI account" };
+    for (int i = 0; i < PROVIDER_COUNT; i++) {
+        const ProviderUsage& p = data->providers[i];
+        ui_update_provider(PROVIDER_WIDGETS[i], p.session_pct, p.session_reset_mins,
+                           p.weekly_pct, p.weekly_reset_mins, p.present, p.ok, ABSENT_MSG[i]);
+    }
 }
 
 void ui_tick_anim(void) {

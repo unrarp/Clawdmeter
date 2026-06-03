@@ -95,6 +95,17 @@ static void my_touch_cb(lv_indev_t* indev, lv_indev_data_t* data) {
     }
 }
 
+// Wire keys + present-default per provider, indexed by PROV_*. Order must match
+// the enum in data.h.
+struct ProviderKeys {
+    const char* s; const char* sr; const char* w; const char* wr;
+    const char* st; const char* ok; const char* present; bool present_default;
+};
+static const ProviderKeys PROVIDER_KEYS[PROVIDER_COUNT] = {
+    { "s",  "sr",  "w",  "wr",  "st",  "ok",  "sp", true  },  // Claude: sp defaults true (old payloads => shown)
+    { "cs", "csr", "cw", "cwr", "cst", "cok", "cp", false },  // Codex: cp defaults false (absent on old payloads)
+};
+
 // Parse a JSON line into UsageData.
 static bool parse_json(const char* json, UsageData* out) {
     JsonDocument doc;
@@ -104,21 +115,17 @@ static bool parse_json(const char* json, UsageData* out) {
         return false;
     }
 
-    out->session_pct = doc["s"] | -1.0f;
-    out->session_reset_mins = doc["sr"] | -1;
-    out->weekly_pct = doc["w"] | -1.0f;
-    out->weekly_reset_mins = doc["wr"] | -1;
-    strlcpy(out->status, doc["st"] | "unknown", sizeof(out->status));
-    out->ok = doc["ok"] | false;
-
-    out->claude_present            = doc["sp"]  | true;   // backward-compat: old payloads => Claude shown
-    out->codex_present             = doc["cp"]  | false;  // old payloads => Codex absent
-    out->codex_session_pct         = doc["cs"]  | -1.0f;  // -1 = "no data yet" sentinel
-    out->codex_session_reset_mins  = doc["csr"] | -1;
-    out->codex_weekly_pct          = doc["cw"]  | -1.0f;
-    out->codex_weekly_reset_mins   = doc["cwr"] | -1;
-    strlcpy(out->codex_status, doc["cst"] | "unknown", sizeof(out->codex_status));
-    out->codex_ok                  = doc["cok"] | false;
+    for (int i = 0; i < PROVIDER_COUNT; i++) {
+        const ProviderKeys& k = PROVIDER_KEYS[i];
+        ProviderUsage& p = out->providers[i];
+        p.session_pct        = doc[k.s]  | -1.0f;
+        p.session_reset_mins = doc[k.sr] | -1;
+        p.weekly_pct         = doc[k.w]  | -1.0f;
+        p.weekly_reset_mins  = doc[k.wr] | -1;
+        strlcpy(p.status, doc[k.st] | "unknown", sizeof(p.status));
+        p.ok      = doc[k.ok]      | false;
+        p.present = doc[k.present] | k.present_default;
+    }
 
     out->valid = true;
     return true;
@@ -238,8 +245,10 @@ static net_state_t last_net_state = NET_DISCONNECTED;
 
 static float max_present_session_pct(const UsageData& u) {
     float m = -1.0f;
-    if (u.claude_present && u.session_pct >= 0)       m = (u.session_pct > m) ? u.session_pct : m;
-    if (u.codex_present  && u.codex_session_pct >= 0) m = (u.codex_session_pct > m) ? u.codex_session_pct : m;
+    for (int i = 0; i < PROVIDER_COUNT; i++) {
+        const ProviderUsage& p = u.providers[i];
+        if (p.present && p.session_pct >= 0 && p.session_pct > m) m = p.session_pct;
+    }
     return m < 0 ? 0.0f : m;   // idle default when no present provider has data
 }
 
