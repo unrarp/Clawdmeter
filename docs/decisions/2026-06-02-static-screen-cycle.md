@@ -14,7 +14,7 @@ The initial plan spec called for dynamic hiding: `sp`/`cp` presence flags would 
 
 ## Decision / Solution
 
-Static cycle: `Splash → Claude → Codex → Bluetooth`, always. An absent provider renders a "No account" panel (`ui_update_provider` with `present=false` shows `"--%"` and `"No Claude account"` / `"No OpenAI account"`). The cycle never changes; `ui_update_provider` handles all four states via a flat switch.
+Static screens: `Claude → Codex → WiFi` cycle (forward, repeating), with Splash toggled in/out separately via `ui_toggle_splash()`. An absent provider renders a "No account" panel (`ui_update_provider` with `present=false` shows `"--%"` and `"No Claude account"` / `"No OpenAI account"`). The cycle never changes; `ui_update_provider` handles all four states via a flat if/return chain.
 
 ## Why
 
@@ -25,7 +25,7 @@ Dynamic hiding requires four distinct pieces of machinery that interact:
 3. **Redirect-on-show in `ui_show_screen`** — if asked to show a disabled screen, redirect to the next enabled one.
 4. **Reconcile-on-payload** — when new data changes presence, if the *currently shown* screen just became disabled, snap to the next enabled screen; also guard `prev_non_splash_screen` to never point at a disabled screen.
 
-Each of these is individually simple, but together they form a web of edge cases: what if both providers are absent (cycle is Splash + Bluetooth only)? What if the user is on the Codex screen and removes their account mid-cycle? What if `prev_non_splash_screen` points at a now-disabled screen on a click-to-toggle-splash action?
+Each of these is individually simple, but together they form a web of edge cases: what if both providers are absent (only WiFi in the forward cycle, both provider screens show "No account")? What if the user is on the Codex screen and removes their account mid-cycle? What if `prev_non_splash_screen` points at a now-disabled screen on a click-to-toggle-splash action?
 
 The static approach deletes all four: the cycle is unconditional, the only firmware change is a flat branch in `ui_update_provider`. The `sp`/`cp` presence flags are still emitted by the daemon and parsed by the firmware — they select the "No account" message text, nothing else.
 

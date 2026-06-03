@@ -8,9 +8,9 @@ tags: [rate-limit, oauth, api-oauth-usage, poll-interval, backoff]
 
 ## Context
 
-Both the bash daemon (`daemon/claude-usage-daemon.sh`) and its macOS Python
-sibling (`daemon/claude_usage_daemon.py`) poll Anthropic for the user's
-session/weekly usage and push it to the ESP32 over BLE. The original approach
+The daemon (`daemon/claude_usage_daemon.py`, a single cross-platform Python
+file) polls Anthropic for the user's session/weekly usage and serves it over
+HTTP; the ESP32 pulls `GET /usage` on its own cadence. The original approach
 (pre-commit `9ac470b`) made a throwaway `POST /v1/messages` (1-token Haiku
 call) and scraped rate-limit headers from the response. Upstream PR #29
 (BrianPugh, 2026-05-24) proposed switching to the purpose-built
@@ -26,14 +26,15 @@ interval and backoff that upstream never landed.
 
 - Poll `GET https://api.anthropic.com/api/oauth/usage` at `POLL_INTERVAL=300`
   seconds (5 minutes) fixed — not adaptive.
-- On poll failure (non-200, or python parse error), set `LAST_POLL` to
-  `NOW - POLL_INTERVAL + POLL_FAIL_BACKOFF` (i.e. retry in 60s) rather than
-  waiting the full 300s or spinning at TICK (5s) rate.
-- The inner loop wakes every `TICK=5s` to catch BLE disconnects; this is
+- On a failed cycle (some provider present, none polled OK), schedule the next
+  poll at `now + POLL_FAIL_BACKOFF` (retry in 60s) rather than `now +
+  POLL_INTERVAL` (the full 300s) or spinning at TICK (5s) rate.
+- The inner loop wakes every `TICK=5s` for responsive shutdown; this is
   separate from the poll cadence.
 
-Reference: `daemon/claude-usage-daemon.sh` — `POLL_INTERVAL`, `POLL_FAIL_BACKOFF`,
-the backoff arithmetic at `LAST_POLL=$(( NOW - POLL_INTERVAL + POLL_FAIL_BACKOFF ))`.
+Reference: `daemon/claude_usage_daemon.py` — `POLL_INTERVAL`, `POLL_FAIL_BACKOFF`,
+and the backoff reconciliation
+`next_poll_at = time.time() + (POLL_INTERVAL if cycle_ok else POLL_FAIL_BACKOFF)`.
 
 ## Why
 
@@ -47,16 +48,15 @@ Hitting it faster produces `429` (hard rate limit, with `retry-after`) or
 | 60s spacing (original daemon interval) | 200, 200, 529, 529 |
 | 300s spacing | two consecutive 200s; stable across 24h observation |
 
-Without a fail-backoff, a single 429 causes the inner 5s tick loop to
-retry immediately on the next tick (because elapsed ≥ POLL_INTERVAL after
-setting LAST_POLL=0 on failure). This is the "5-second storm" that caused
-upstream to revert PR #29 — one failure self-perpetuates.
+Without a fail-backoff, a single 429 would schedule the next poll at roughly
+`now` (or worse), so the inner 5s tick loop retries on the very next tick —
+the "5-second storm" that caused upstream to revert PR #29, where one failure
+self-perpetuates. `POLL_FAIL_BACKOFF` is what spaces the retries out to 60s.
 
-The REFRESH_FLAG path (ESP fires a BLE notify requesting fresh data on
-boot) also bypasses the time check; however, the firmware guard
-`!has_received_data` (see `firmware/src/ble.cpp` — `onSubscribe`) means this
-fires at most once per connection, not on every reconnect, so it doesn't
-compound a storm.
+There is no device-initiated path that can bypass the poll timer. The device
+pulls the daemon's cached snapshot via `GET /usage` at whatever rate it likes;
+the daemon polls upstream strictly on its own `next_poll_at` schedule, so device
+behavior (boot, reconnect, manual refresh) cannot compound the upstream rate.
 
 ## Alternatives considered
 
@@ -87,5 +87,5 @@ compound a storm.
 
 - Upstream PR #29 (switch): https://github.com/HermannBjorgvin/Clawdmeter/pull/29
 - Upstream PR #37 (revert): https://github.com/HermannBjorgvin/Clawdmeter/pull/37
-- `daemon/CLAUDE.md` "Daemon / host side" — runtime behavior docs
+- `CLAUDE.md` "Daemon / host side" — runtime behavior docs
 - `.claude/rules/daemon.md` — rule bullet
