@@ -310,6 +310,19 @@ void loop() {
         ui_update_wifi_status(ns, net_get_ssid(), net_get_ip(), net_get_rssi(), net_last_update_ms());
     }
 
+    // The "Updated: Ns ago" / daemon-staleness lines are computed at call time,
+    // so they only advance when this runs. State-change and new-data events are
+    // ~45 s apart — without a periodic tick the age sticks at "0s ago". Refresh
+    // once a second while the WiFi diagnostics screen is the one on display.
+    {
+        static uint32_t last_wifi_tick = 0;
+        uint32_t now = millis();
+        if (ui_get_current_screen() == SCREEN_WIFI && now - last_wifi_tick >= 1000) {
+            last_wifi_tick = now;
+            ui_update_wifi_status(ns, net_get_ssid(), net_get_ip(), net_get_rssi(), net_last_update_ms());
+        }
+    }
+
     static int  last_pct      = -2;
     static bool last_charging = false;
     int  pct      = power_hal_battery_pct();

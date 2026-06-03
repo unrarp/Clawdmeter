@@ -52,6 +52,7 @@ struct Layout {
     int16_t bt_device_y;
     int16_t bt_mac_y;
     int16_t bt_rssi_y;
+    int16_t bt_daemon_y;
     int16_t bt_age_y;
     const lv_font_t* bt_status_font;
     const lv_font_t* bt_device_font;  // also used for sub-lines
@@ -85,14 +86,19 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_bar_y = 56;
         L.usage_reset_y = 94;
         L.usage_pct_font   = &font_styrene_48;
-        L.bt_info_panel_h = 200;
+        // Panel extends down to just above the credit lines (≈396 bottom),
+        // so the grey fills the screen like the usage page rather than
+        // floating as a short box. It stops ~30px shy of where the usage
+        // panels end because, unlike them, this screen has credits below.
+        L.bt_info_panel_h = 286;
         L.bt_icon_scale = 256;   // status icon at native 48px (LV_SCALE_NONE — no transform)
         L.bt_status_x = 56;
         L.bt_status_y = 2;
-        L.bt_device_y = 64;
-        L.bt_mac_y = 100;
-        L.bt_rssi_y = 136;
-        L.bt_age_y = 166;
+        L.bt_device_y = 68;
+        L.bt_mac_y = 106;
+        L.bt_rssi_y = 144;
+        L.bt_daemon_y = 182;
+        L.bt_age_y = 220;
         L.bt_status_font   = &font_styrene_48;
         L.bt_device_font   = &font_styrene_28;
         L.bt_credit_1_font = &font_styrene_24;
@@ -101,21 +107,25 @@ static void compute_layout(const BoardCaps& c) {
         // Compact layout — tuned for 368x448 (AMOLED-1.8). The panel is only
         // ~7% shorter than the square, so heights/fonts stay close to the
         // large layout; the title shrinks only because "WiFi" at 56px would
-        // overrun the narrower (368px) width. Panel shrinks just enough to
-        // fit all four diagnostic rows + credits at the bottom.
+        // overrun the narrower (368px) width. Panel holds the status row +
+        // five diagnostic rows (SSID, IP, signal, daemon, age) + credits.
         L.title_font       = &font_tiempos_34;
         L.usage_panel_h = 134;
         L.usage_bar_y = 48;
         L.usage_reset_y = 78;    // ends ~2px above the panel content bottom (clearance for descenders)
         L.usage_pct_font   = &font_styrene_36;   // headline %, a step down from 48 so the row breathes
-        L.bt_info_panel_h = 185;
+        // Extends to ≈368 bottom — just above the credit lines — so the grey
+        // matches the usage page; stops short of the usage-panel bottom (394)
+        // to leave room for the two credit lines this screen has below it.
+        L.bt_info_panel_h = 258;
         L.bt_icon_scale = 160;   // scale status icon 48px -> ~30px to match the 28px status text
         L.bt_status_x = 44;
         L.bt_status_y = 4;
-        L.bt_device_y = 54;
-        L.bt_mac_y = 84;
-        L.bt_rssi_y = 114;
-        L.bt_age_y = 144;
+        L.bt_device_y = 56;
+        L.bt_mac_y = 92;
+        L.bt_rssi_y = 128;
+        L.bt_daemon_y = 164;
+        L.bt_age_y = 200;
         L.bt_status_font   = &font_styrene_28;
         L.bt_device_font   = &font_styrene_20;   // sub-lines; 24px overflowed the 296px inner width
         L.bt_credit_1_font = &font_styrene_20;
@@ -165,6 +175,7 @@ static lv_obj_t* lbl_wifi_status;
 static lv_obj_t* lbl_wifi_ssid;
 static lv_obj_t* lbl_wifi_ip;
 static lv_obj_t* lbl_wifi_rssi;
+static lv_obj_t* lbl_wifi_daemon;
 static lv_obj_t* lbl_wifi_age;
 
 // ---- Battery indicator (shared, on top) ----
@@ -449,6 +460,12 @@ static void init_wifi_screen(lv_obj_t* scr) {
     lv_obj_set_style_text_color(lbl_wifi_rssi, COL_DIM, 0);
     lv_obj_set_pos(lbl_wifi_rssi, 0, L.bt_rssi_y);
 
+    lbl_wifi_daemon = lv_label_create(p_info);
+    lv_label_set_text(lbl_wifi_daemon, "Daemon: ---");
+    lv_obj_set_style_text_font(lbl_wifi_daemon, L.bt_device_font, 0);
+    lv_obj_set_style_text_color(lbl_wifi_daemon, COL_DIM, 0);
+    lv_obj_set_pos(lbl_wifi_daemon, 0, L.bt_daemon_y);
+
     lbl_wifi_age = lv_label_create(p_info);
     lv_label_set_text(lbl_wifi_age, "Updated: \xe2\x80\x94");
     lv_obj_set_style_text_font(lbl_wifi_age, L.bt_device_font, 0);
@@ -714,13 +731,41 @@ void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip,
         lv_label_set_text(lbl_wifi_rssi, rbuf);
     }
 
+    // Age of the last good GET, computed once and shared by the daemon-health
+    // verdict and the "Updated: …" line below. 0 means "never fetched".
+    uint32_t age_ms = (last_update_ms == 0) ? 0 : (millis() - last_update_ms);
+
+    // Daemon reachability — inferred from whether a good GET has landed and how
+    // stale it is. Distinguishes "WiFi up but daemon unreachable" (the common
+    // failure: daemon down, wrong host, or mDNS not resolving) from a healthy link.
+    // The 120 s threshold is ~2.7× the 45 s device fetch interval (FETCH_INTERVAL_MS),
+    // so it trips only after ~3 missed fetches — not on normal inter-fetch quiet.
+    {
+        if (state != NET_ONLINE) {
+            lv_label_set_text(lbl_wifi_daemon, "Daemon: ---");
+            lv_obj_set_style_text_color(lbl_wifi_daemon, COL_DIM, 0);
+        } else if (last_update_ms == 0) {
+            // No good /usage body yet. Covers both "daemon unreachable" and
+            // "daemon up but still returning 503 {no data yet}" — we can't tell
+            // them apart from last_update_ms alone, so don't claim "no response".
+            lv_label_set_text(lbl_wifi_daemon, "Daemon: no data");
+            lv_obj_set_style_text_color(lbl_wifi_daemon, COL_RED, 0);
+        } else if (age_ms <= 120000UL) {
+            lv_label_set_text(lbl_wifi_daemon, "Daemon: connected");
+            lv_obj_set_style_text_color(lbl_wifi_daemon, COL_GREEN, 0);
+        } else {
+            lv_label_set_text(lbl_wifi_daemon, "Daemon: stale");
+            lv_obj_set_style_text_color(lbl_wifi_daemon, COL_AMBER, 0);
+        }
+    }
+
     // Last-update age
     {
         static char abuf[48];
         if (last_update_ms == 0) {
             snprintf(abuf, sizeof(abuf), "Updated: \xe2\x80\x94");
         } else {
-            uint32_t age_s = (millis() - last_update_ms) / 1000;
+            uint32_t age_s = age_ms / 1000;
             if (age_s < 60)
                 snprintf(abuf, sizeof(abuf), "Updated: %lus ago", (unsigned long)age_s);
             else
