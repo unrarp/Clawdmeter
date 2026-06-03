@@ -462,7 +462,7 @@ static void init_wifi_screen(lv_obj_t* scr) {
     lv_obj_align(lbl_credit, LV_ALIGN_BOTTOM_MID, 0, -46);
 
     lv_obj_t* lbl_credit2 = lv_label_create(wifi_container);
-    lv_label_set_text(lbl_credit2, "Clawd animation by @amaanbuilds");
+    lv_label_set_text(lbl_credit2, "Clawd animation by @marciogranzotto");
     lv_obj_set_style_text_font(lbl_credit2, L.bt_credit_2_font, 0);
     lv_obj_set_style_text_color(lbl_credit2, COL_DIM, 0);
     lv_obj_align(lbl_credit2, LV_ALIGN_BOTTOM_MID, 0, -20);

@@ -13,6 +13,12 @@ firmware/.vscode/
 tools/node_modules/
 tools/package-lock.json
 
+# SVG animation pipeline scratch (rendered wrappers + captured frames)
+tools/svg_pipeline/.cache/
+
+# Generated at build time by the splash pre-build hook (firmware/scripts/gen_splash.py)
+firmware/src/splash_animations.h
+
 # WiFi/daemon-host secrets — keep local, never commit
 firmware/tools/mdns_spike/include/spike_config.h
 firmware/src/net_config.h

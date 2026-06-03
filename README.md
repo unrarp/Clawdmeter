@@ -8,7 +8,7 @@ It runs on a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/es
 | :-----------------------------------: | :----------------------------------------------: |
 | ![Usage meter](assets/demo.jpeg) | ![Clawd animation screen](assets/demo.gif) |
 
-The Clawd animations come from [claudepix](https://claudepix.vercel.app), [@amaanbuilds](https://x.com/amaanbuilds)'s library of pixel-art Clawd sprites, check it out, it's lovely.
+The Clawd animations come from the [clawd-tank](https://github.com/marciogranzotto/clawd-tank) SVG set by [@marciogranzotto](https://github.com/marciogranzotto) (MIT). A 4-stage pipeline under `tools/svg_pipeline/` renders and converts them to the C arrays the firmware compiles in.
 
 ## Screens
 
@@ -238,25 +238,33 @@ Default tint is white (`0xFFFFFF`); Lucide PNGs ship as black-on-transparent and
 
 ### Splash animations
 
-The animations come from [claudepix.vercel.app](https://claudepix.vercel.app),
-a library of Clawd sprites. `tools/scrape_claudepix.js` evaluates the
-site's JavaScript in a Node VM to pull out frame data and palettes, then
-`tools/convert_to_c.js` turns everything into RGB565 C arrays and writes
+The animations come from the [clawd-tank](https://github.com/marciogranzotto/clawd-tank)
+SVG set (MIT), vendored in `tools/svg_pipeline/svg/`. A 4-stage pipeline
+converts them: `make_wrappers.py` wraps each SVG in a tight-cropped HTML
+page (via cairosvg), `capture_frames.mjs` uses headless Playwright to
+capture N frames across one CSS-animation loop, `frames_to_data.py`
+palette-quantizes the frames and writes `tools/svg_anim_data/manifest.json`
+plus per-animation `clawd_*.bin` (binary palette-index data), and
+`tools/svg_pipeline/gen_splash_header.py` reads those and emits
 `firmware/src/splash_animations.h`.
 
-To re-pull (e.g. when the source library updates):
+Current set: 12 animations at 128×128, 24-color palette, ~20 frames each.
+Active animations and per-animation params live in
+`tools/svg_pipeline/animations.json`.
+
+To regenerate:
 
 ```bash
-node tools/scrape_claudepix.js
-node tools/convert_to_c.js
+tools/svg_pipeline/build.sh
 pio run -d firmware -t upload
 ```
 
+Dependencies: Python `pillow` + `cairosvg`; Node `playwright` + Chromium.
 See `tools/README.md` for details.
 
 ## Credits
 
-- Pixel-art Clawd animation by [@amaanbuilds](https://x.com/amaanbuilds), sourced from [claudepix.vercel.app](https://claudepix.vercel.app). Frame data and palettes scraped + converted by the tooling in `tools/`.
+- Clawd SVG animations from [clawd-tank](https://github.com/marciogranzotto/clawd-tank) by [@marciogranzotto](https://github.com/marciogranzotto) (MIT). Rendered and converted to firmware C arrays by the pipeline in `tools/svg_pipeline/`.
 - Lucide icon set ([lucide.dev](https://lucide.dev), MIT) for wifi and battery UI glyphs.
 - Anthropic brand fonts (Tiempos Text, Styrene B) — see licensing warning below.
 
