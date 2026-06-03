@@ -1,6 +1,14 @@
 {
+  "name": "clawdmeter-tools",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "icon": "node png_to_lvgl.js"
+  },
   "dependencies": {
-    "pngjs": "^7.0.0",
-    "sharp": "^0.34.5"
+    "pngjs": "^7.0.0"
   }
 }

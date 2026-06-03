@@ -4,8 +4,10 @@
 Reads animations.json + svg/, writes per-animation HTML wrappers with
 tight-cropped inlined SVGs into .cache/, then writes .cache/manifest.json.
 
-Math copied verbatim from /tmp/build_preview_html.py (tight_viewbox, inline_svg)
-and /tmp/gen_wrappers.py. Do NOT alter the viewBox computation.
+Do NOT alter the tight_viewbox / inline_svg math: it must match the reference
+rasterization used to produce the committed .bin data in tools/svg_anim_data/.
+Changing the viewBox computation would shift the crop window and make newly
+captured frames spatially inconsistent with existing committed data.
 """
 import os, json, io, re
 import cairosvg
@@ -18,7 +20,8 @@ CACHE_DIR  = os.path.join(SCRIPT_DIR, ".cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 # --- load config ---
-cfg = json.load(open(CFG_PATH, encoding="utf-8"))
+with open(CFG_PATH, encoding="utf-8") as _f:
+    cfg = json.load(_f)
 params = cfg["params"]
 CAPTURE_PX = params["capture_px"]
 FRAMES     = params["frames"]
@@ -51,7 +54,8 @@ def parse_vb(txt):
     return tuple(float(v) for v in m.group(1).replace(",", " ").split())
 
 def inline_svg(svg_path):
-    txt = open(svg_path, encoding="utf-8").read()
+    with open(svg_path, encoding="utf-8") as _f:
+        txt = _f.read()
     orig = parse_vb(txt)
     nx, ny, nw, nh = tight_viewbox(svg_path, orig)
     # rewrite the opening <svg ...> tag: tight viewBox, fill container, keep all defs/styles
@@ -82,7 +86,8 @@ for anim in cfg["animations"]:
             f'</style></head><body><div id="box">{svg}</div></body></html>')
 
     html_path = os.path.join(CACHE_DIR, f"{name}.html")
-    open(html_path, "w", encoding="utf-8").write(html)
+    with open(html_path, "w", encoding="utf-8") as _f:
+        _f.write(html)
     manifest_items.append({"name": name, "html": html_path})
     print(f"wrapper  {name}")
 
@@ -93,5 +98,6 @@ manifest = {
     "items":      manifest_items,
 }
 manifest_path = os.path.join(CACHE_DIR, "manifest.json")
-json.dump(manifest, open(manifest_path, "w"), indent=2)
+with open(manifest_path, "w", encoding="utf-8") as _f:
+    json.dump(manifest, _f, indent=2)
 print(f"manifest -> {manifest_path}  ({len(manifest_items)} animations)")

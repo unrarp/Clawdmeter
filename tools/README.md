@@ -9,10 +9,11 @@ SVGs are vendored in `tools/svg_pipeline/svg/` from the
 [clawd-tank](https://github.com/marciogranzotto/clawd-tank) set (MIT).
 Active animations and their parameters are listed in
 `tools/svg_pipeline/animations.json` — edit there to add, remove, or
-retune an animation. The `group` field is a human-readable annotation of
-intended usage-rate bucket; it is NOT propagated to the generated header and
-has no runtime effect. The authoritative sync point is each animation's `name`
-string matching `GROUP_NAMES` in `firmware/src/splash.cpp`.
+retune an animation. The `group` field — one of `"idle"`, `"normal"`,
+`"active"`, `"heavy"` (the usage-rate tiers in `firmware/src/usage_rate.cpp`) —
+is the single authoritative rate-bucket assignment: it is propagated through
+`manifest.json` into the generated header's `splash_anim_def_t.group` string,
+and `splash.cpp` maps it to a rate-group index via its `RATE_TIERS` table.
 
 ## Pipeline
 
@@ -32,7 +33,7 @@ source of truth is the binary data in `tools/svg_anim_data/` (`manifest.json` +
 `clawd_*.bin`). `gen_splash_header.py` reads those and emits:
 - `splash_<ident>_f{N}[W*H]` flat arrays + `splash_<ident>_frames[N]` pointer table — per-frame palette indices
 - `splash_<ident>_holds[N]` — per-frame hold time in ms
-- `splash_anims[]` — master table (name, category, width, height, frame_count, palette, frames, holds)
+- `splash_anims[]` — master table (name, group, width, height, frame_count, palette, frames, holds)
 - `SPLASH_ANIM_COUNT`, `SPLASH_PALETTE_SIZE`
 
 The firmware (`splash.cpp`) consumes this header.

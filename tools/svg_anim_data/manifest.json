@@ -3,7 +3,7 @@
   "animations": [
     {
       "name": "idle living",
-      "category": "Idle",
+      "group": "idle",
       "width": 128,
       "height": 128,
       "frame_count": 20,
@@ -59,7 +59,7 @@
     },
     {
       "name": "sleeping",
-      "category": "Idle",
+      "group": "idle",
       "width": 128,
       "height": 128,
       "frame_count": 20,
@@ -115,7 +115,7 @@
     },
     {
       "name": "happy",
-      "category": "Idle",
+      "group": "idle",
       "width": 128,
       "height": 128,
       "frame_count": 20,
@@ -171,7 +171,7 @@
     },
     {
       "name": "working typing",
-      "category": "Work",
+      "group": "normal",
       "width": 128,
       "height": 128,
       "frame_count": 20,
@@ -227,7 +227,7 @@
     },
     {
       "name": "working thinking",
-      "category": "Work",
+      "group": "normal",
       "width": 128,
       "height": 128,
       "frame_count": 20,
@@ -283,7 +283,7 @@
     },
     {
       "name": "working debugger",
-      "category": "Work",
+      "group": "normal",
       "width": 128,
       "height": 128,
       "frame_count": 20,
@@ -339,7 +339,7 @@
     },
     {
       "name": "working building",
-      "category": "Work",
+      "group": "active",
       "width": 128,
       "height": 128,
       "frame_count": 20,
@@ -395,7 +395,7 @@
     },
     {
       "name": "working sweeping",
-      "category": "Work",
+      "group": "active",
       "width": 128,
       "height": 128,
       "frame_count": 20,
@@ -451,7 +451,7 @@
     },
     {
       "name": "grooving",
-      "category": "Active",
+      "group": "active",
       "width": 128,
       "height": 128,
       "frame_count": 20,
@@ -507,7 +507,7 @@
     },
     {
       "name": "working juggling",
-      "category": "Heavy",
+      "group": "heavy",
       "width": 128,
       "height": 128,
       "frame_count": 20,
@@ -563,7 +563,7 @@
     },
     {
       "name": "working overheated",
-      "category": "Heavy",
+      "group": "heavy",
       "width": 128,
       "height": 128,
       "frame_count": 20,
@@ -619,7 +619,7 @@
     },
     {
       "name": "eureka",
-      "category": "Heavy",
+      "group": "heavy",
       "width": 128,
       "height": 128,
       "frame_count": 20,

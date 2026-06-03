@@ -49,17 +49,17 @@ All parameters and the animation list live in **`animations.json`**:
     "capture_px": 288    // Playwright viewport side in px
   },
   "animations": [
-    { "svg": "clawd-idle-living", "name": "idle living", "category": "Idle", "group": 0 },
+    { "svg": "clawd-idle-living", "name": "idle living", "group": "idle" },
     ...
   ]
 }
 ```
 
-The `group` field is a human-readable annotation of intended usage-rate bucket.
-It is NOT propagated to the manifest or the generated header and has no
-compile-time/runtime effect. Runtime group membership is resolved by matching
-each animation's `name` string against `GROUP_NAMES` in
-`firmware/src/splash.cpp` — that name match is the authoritative sync point.
+The `group` field — one of `"idle"`, `"normal"`, `"active"`, `"heavy"` (the
+usage-rate tiers in `firmware/src/usage_rate.cpp`) — is the single authoritative
+rate-bucket assignment. It is propagated through `manifest.json` into the
+generated header's `splash_anim_def_t.group` string, which `splash.cpp` maps to a
+rate-group index via its `RATE_TIERS` table.
 
 ## Dependencies
 
@@ -79,12 +79,15 @@ each animation's `name` string against `GROUP_NAMES` in
    in `tools/node_modules`.
 2. `import(process.env.PLAYWRIGHT_DIR + '/playwright')` — set `PLAYWRIGHT_DIR`
    to override.
-3. Hard-coded global fallback:
-   `/home/rarp/.nvm/versions/node/v22.12.0/lib/node_modules/@playwright/cli/node_modules/playwright`
+
+If neither resolves, the script exits with a clear error asking you to install
+playwright or set `PLAYWRIGHT_DIR`.
 
 The Chromium executable is resolved by scanning
 `~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome` and picking the
 newest entry that does not include "headless" in the directory name.
+Note: the `chrome-linux64/chrome` path is Linux-only; capture is not
+supported on macOS or Windows without manual changes to `resolveChrome()`.
 
 ## Attribution
 

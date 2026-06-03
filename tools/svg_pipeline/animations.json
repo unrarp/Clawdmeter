@@ -1,5 +1,5 @@
 {
-  "_comment": "Active splash animation set + render params. Single source of truth for the pipeline (make_wrappers.py -> capture_frames.mjs -> frames_to_data.py -> gen_splash_header.py). 'group' is a human-readable annotation of intended usage-rate bucket — it is NOT propagated to the manifest or the generated header and has no compile-time/runtime effect. Runtime group membership is resolved by matching each animation's name string against GROUP_NAMES in firmware/src/splash.cpp. Source SVGs vendored in ./svg/ (MIT, marciogranzotto/clawd-tank).",
+  "_comment": "Active splash animation set + render params. Single source of truth for the pipeline (make_wrappers.py -> capture_frames.mjs -> frames_to_data.py -> gen_splash_header.py). 'group' is the authoritative rate-bucket tier — one of \"idle\", \"normal\", \"active\", \"heavy\" (matching the usage-rate tiers in firmware/src/usage_rate.cpp). It is propagated through manifest.json into splash_anim_def_t.group in the generated header; splash.cpp maps it to a rate-group index via RATE_TIERS. Source SVGs vendored in ./svg/ (MIT, marciogranzotto/clawd-tank).",
   "params": {
     "grid": 128,
     "palette": 24,
@@ -8,17 +8,17 @@
     "capture_px": 288
   },
   "animations": [
-    { "svg": "clawd-idle-living",        "name": "idle living",        "category": "Idle",   "group": 0 },
-    { "svg": "clawd-sleeping",           "name": "sleeping",           "category": "Idle",   "group": 0 },
-    { "svg": "clawd-happy",              "name": "happy",              "category": "Idle",   "group": 0 },
-    { "svg": "clawd-working-typing",     "name": "working typing",     "category": "Work",   "group": 1 },
-    { "svg": "clawd-working-thinking",   "name": "working thinking",   "category": "Work",   "group": 1 },
-    { "svg": "clawd-working-debugger",   "name": "working debugger",   "category": "Work",   "group": 1 },
-    { "svg": "clawd-working-building",   "name": "working building",   "category": "Work",   "group": 2 },
-    { "svg": "clawd-working-sweeping",   "name": "working sweeping",   "category": "Work",   "group": 2 },
-    { "svg": "clawd-grooving",           "name": "grooving",           "category": "Active", "group": 2 },
-    { "svg": "clawd-working-juggling",   "name": "working juggling",   "category": "Heavy",  "group": 3 },
-    { "svg": "clawd-working-overheated", "name": "working overheated", "category": "Heavy",  "group": 3 },
-    { "svg": "clawd-eureka",             "name": "eureka",             "category": "Heavy",  "group": 3 }
+    { "svg": "clawd-idle-living",        "name": "idle living",        "group": "idle"   },
+    { "svg": "clawd-sleeping",           "name": "sleeping",           "group": "idle"   },
+    { "svg": "clawd-happy",              "name": "happy",              "group": "idle"   },
+    { "svg": "clawd-working-typing",     "name": "working typing",     "group": "normal" },
+    { "svg": "clawd-working-thinking",   "name": "working thinking",   "group": "normal" },
+    { "svg": "clawd-working-debugger",   "name": "working debugger",   "group": "normal" },
+    { "svg": "clawd-working-building",   "name": "working building",   "group": "active" },
+    { "svg": "clawd-working-sweeping",   "name": "working sweeping",   "group": "active" },
+    { "svg": "clawd-grooving",           "name": "grooving",           "group": "active" },
+    { "svg": "clawd-working-juggling",   "name": "working juggling",   "group": "heavy"  },
+    { "svg": "clawd-working-overheated", "name": "working overheated", "group": "heavy"  },
+    { "svg": "clawd-eureka",             "name": "eureka",             "group": "heavy"  }
   ]
 }

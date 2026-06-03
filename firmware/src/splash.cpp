@@ -34,38 +34,45 @@ static bool active = false;
 #define SPLASH_ROTATE_INTERVAL_MS 20000
 
 // Usage-rate animation groups: 4 groups × up to 4 animations each.
-// Filled at init by matching literal names from splash_anims[].
+// Filled at init by mapping each animation's `group` tier name to an index.
 #define GROUP_COUNT 4
 #define GROUP_MAX   4
 static int8_t  group_lists[GROUP_COUNT][GROUP_MAX];
 static uint8_t group_size[GROUP_COUNT] = {0};
 static uint8_t group_rotation[GROUP_COUNT] = {0};
 
-static const char* GROUP_NAMES[GROUP_COUNT][GROUP_MAX] = {
-    // Group 0 — idle / low usage
-    { "idle living", "sleeping", "happy", NULL },
-    // Group 1 — normal pace
-    { "working typing", "working thinking", "working debugger", NULL },
-    // Group 2 — active
-    { "working building", "working sweeping", "grooving", NULL },
-    // Group 3 — heavy
-    { "working juggling", "working overheated", "eureka", NULL },
-};
+// Rate-bucket tier names indexed by usage-rate group. This is the single
+// firmware authority for tier name <-> index, so the order MUST match
+// usage_rate_group() (usage_rate.cpp: 0=idle, 1=normal, 2=active, 3=heavy).
+static const char* const RATE_TIERS[GROUP_COUNT] = { "idle", "normal", "active", "heavy" };
+
+static int tier_index(const char* group) {
+    if (!group) return -1;
+    for (int g = 0; g < GROUP_COUNT; g++)
+        if (strcmp(group, RATE_TIERS[g]) == 0) return g;
+    return -1;
+}
 
 static void resolve_group_lists(void) {
     for (int g = 0; g < GROUP_COUNT; g++) {
         group_size[g] = 0;
         for (int s = 0; s < GROUP_MAX; s++) {
             group_lists[g][s] = -1;
-            const char* want = GROUP_NAMES[g][s];
-            if (!want) continue;
-            for (int i = 0; i < SPLASH_ANIM_COUNT; i++) {
-                if (strcmp(splash_anims[i].name, want) == 0) {
-                    group_lists[g][group_size[g]++] = (int8_t)i;
-                    break;
-                }
-            }
         }
+    }
+    for (int i = 0; i < SPLASH_ANIM_COUNT; i++) {
+        int g = tier_index(splash_anims[i].group);
+        if (g < 0) {
+            Serial.printf("splash: '%s' has unknown group '%s' — skipped\n",
+                          splash_anims[i].name, splash_anims[i].group);
+            continue;
+        }
+        if (group_size[g] >= GROUP_MAX) {
+            Serial.printf("splash: group '%s' full (max %d) — '%s' skipped\n",
+                          RATE_TIERS[g], GROUP_MAX, splash_anims[i].name);
+            continue;
+        }
+        group_lists[g][group_size[g]++] = (int8_t)i;
     }
 }
 

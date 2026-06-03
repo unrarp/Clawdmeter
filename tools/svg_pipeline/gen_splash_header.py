@@ -87,6 +87,9 @@ def needs_regen(in_dir, out_file):
     manifest = os.path.join(in_dir, "manifest.json")
     if not os.path.exists(manifest):
         return True
+    # Generator script itself: editing emit logic should trigger a rebuild.
+    if os.path.getmtime(__file__) > out_mtime:
+        return True
     if os.path.getmtime(manifest) > out_mtime:
         return True
     for fname in os.listdir(in_dir):
@@ -121,13 +124,16 @@ def generate(in_dir, out_file):
     out.append('// Animations are per-anim width x height (current set: 128x128).\n')
     out.append('// frames[] is an array of pointers to width*height-byte index grids\n')
     out.append('// so sizes can be mixed.\n')
+    out.append('// group: usage-rate tier name ("idle"/"normal"/"active"/"heavy") —\n')
+    out.append('// propagated from animations.json; splash.cpp maps it to a rate-group\n')
+    out.append('// index via RATE_TIERS for rate-driven animation selection.\n')
     out.append('#pragma once\n#include <stdint.h>\n\n')
 
     out.append(f'#define SPLASH_PALETTE_SIZE {palette_size}\n\n')
 
     out.append('typedef struct {\n')
     out.append('    const char *name;\n')
-    out.append('    const char *category;\n')
+    out.append('    const char *group;\n')
     out.append('    uint8_t width;\n')
     out.append('    uint8_t height;\n')
     out.append('    uint16_t frame_count;\n')
@@ -144,7 +150,10 @@ def generate(in_dir, out_file):
         ident = _safe_ident(bin_stem)
 
         name        = anim["name"]
-        category    = anim["category"]
+        if "group" not in anim:
+            sys.exit(f"ERROR: manifest entry '{anim.get('bin', name)}' is missing 'group' — "
+                     "regenerate manifest.json with frames_to_data.py")
+        group       = anim["group"]
         W           = anim["width"]
         H           = anim["height"]
         frame_count = anim["frame_count"]
@@ -180,19 +189,19 @@ def generate(in_dir, out_file):
         out.append(f'static const uint16_t splash_{ident}_holds[{frame_count}] = {{{holds_str}}};\n\n')
 
         entries.append({
-            "ident":    ident,
-            "name":     name,
-            "category": category,
-            "width":    W,
-            "height":   H,
-            "count":    frame_count,
+            "ident":  ident,
+            "name":   name,
+            "group":  group,
+            "width":  W,
+            "height": H,
+            "count":  frame_count,
         })
 
     out.append(f'#define SPLASH_ANIM_COUNT {len(entries)}\n')
     out.append(f'static const splash_anim_def_t splash_anims[SPLASH_ANIM_COUNT] = {{\n')
     for e in entries:
         out.append(
-            f'    {{"{e["name"]}", "{e["category"]}", {e["width"]}, {e["height"]}, '
+            f'    {{"{e["name"]}", "{e["group"]}", {e["width"]}, {e["height"]}, '
             f'{e["count"]}, splash_{e["ident"]}_palette, splash_{e["ident"]}_frames, '
             f'splash_{e["ident"]}_holds}},\n'
         )

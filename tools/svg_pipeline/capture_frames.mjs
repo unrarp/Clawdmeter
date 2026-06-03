@@ -6,15 +6,16 @@
  * .cache/frames/<name>/f00.png … f19.png.
  *
  * Playwright resolution (in order):
- *   1. require('playwright') — works when @playwright/test is installed locally
+ *   1. require('playwright') — works when playwright is installed locally
  *      or in tools/node_modules.
  *   2. Dynamic import of the path in the PLAYWRIGHT_DIR env var.
- *   3. Hard-coded global fallback:
- *      /home/rarp/.nvm/versions/node/v22.12.0/lib/node_modules/@playwright/cli/node_modules/playwright
+ *   If neither resolves, exits with a clear error: install playwright
+ *   (npm i playwright) or set PLAYWRIGHT_DIR to its directory.
  *
- * Chromium executable resolution:
- *   Scans $HOME/.cache/ms-playwright/chromium-NNNN/chrome-linux64/chrome (newest match,
- *   excludes headless_shell variants), mirroring the original capture.js logic.
+ * Chromium executable resolution (Linux only):
+ *   Scans $HOME/.cache/ms-playwright/chromium-NNNN/chrome-linux64/chrome (newest
+ *   match, excludes headless_shell variants). The chrome-linux64/chrome path is
+ *   Linux-specific; macOS/Windows users must modify resolveChrome() manually.
  */
 import { createRequire } from 'module';
 import { readFileSync, mkdirSync, readdirSync } from 'fs';
@@ -44,29 +45,23 @@ async function loadPlaywright() {
     } catch (_) {}
   }
 
-  // 3. Known global fallback path (installed via npm -g @playwright/cli on this host)
-  const fallback = '/home/rarp/.nvm/versions/node/v22.12.0/lib/node_modules/@playwright/cli/node_modules/playwright';
-  try {
-    const mod = await import(fallback);
-    return mod;
-  } catch (_) {}
-  try {
-    return require(fallback);
-  } catch (_) {}
-
   throw new Error(
-    'Cannot locate Playwright. Install it (npm i -g playwright) or set PLAYWRIGHT_DIR to its directory.'
+    'Cannot locate Playwright. Install it (`npm i playwright` in tools/) or ' +
+    'set the PLAYWRIGHT_DIR env var to the directory containing playwright.'
   );
 }
 
-// --- Chromium executable resolution (mirrors capture.js) ---
+// --- Chromium executable resolution (Linux-only) ---
+// Assumes chrome-linux64/chrome path — macOS/Windows users must modify this.
 function resolveChrome() {
   const base = join(homedir(), '.cache', 'ms-playwright');
   const dirs = readdirSync(base)
     .filter(d => d.startsWith('chromium-') && !d.includes('headless'))
     .sort();
   const dir = dirs.pop();
-  if (!dir) throw new Error(`No chromium-* dir found under ${base}`);
+  if (!dir) throw new Error(
+    `No chromium-* dir found under ${base}. Run: npx playwright install chromium`
+  );
   return join(base, dir, 'chrome-linux64', 'chrome');
 }
 
