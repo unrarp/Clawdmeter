@@ -180,16 +180,18 @@ The `firmware/src/font_*.c` files are pre-compiled LVGL bitmap fonts.
 npm install -g lv_font_conv
 ```
 
-Generate each one (one at a time — `lv_font_conv` doesn't like loop-driven invocations) with `--no-compress` (required for LVGL 9):
+Generate them with `--no-compress` (required for LVGL 9):
 
 ```bash
-# Tiempos Text (titles, 56px)
-lv_font_conv --font assets/TiemposText-400-Regular.otf -r 0x20-0x7E \
-  --size 56 --format lvgl --bpp 4 --no-compress \
-  -o firmware/src/font_tiempos_56.c --lv-include "lvgl.h"
+# Tiempos Text (titles: 56px square layout, 34px compact layout)
+for size in 56 34; do
+  lv_font_conv --font assets/TiemposText-400-Regular.otf -r 0x20-0x7E \
+    --size $size --format lvgl --bpp 4 --no-compress \
+    -o firmware/src/font_tiempos_${size}.c --lv-include "lvgl.h"
+done
 
-# Styrene B (numbers 48/36, panel labels 28, small text 24/20, fine print 16/14/12)
-for size in 48 36 28 24 20 16 14 12; do
+# Styrene B (numbers 48/36, panel labels 28, small text 24/20, fine print 16)
+for size in 48 36 28 24 20 16; do
   lv_font_conv --font assets/StyreneB-Regular.otf -r 0x20-0x7E \
     --size $size --format lvgl --bpp 4 --no-compress \
     -o firmware/src/font_styrene_${size}.c --lv-include "lvgl.h"

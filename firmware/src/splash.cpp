@@ -16,7 +16,7 @@ static int  canvas_dim = 480;       // recomputed in splash_init()
 // Background fallback when palette is missing
 #define COL_EMPTY    0x0000  // true black (matches THEME_BG)
 
-LV_FONT_DECLARE(font_styrene_28);
+#include "fonts.h"
 
 static lv_obj_t *splash_container = NULL;
 static lv_obj_t *canvas = NULL;

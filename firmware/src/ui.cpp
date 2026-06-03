@@ -10,17 +10,9 @@
 static_assert(LOGO_CLAUDE_WIDTH == LOGO_OPENAI_WIDTH && LOGO_CLAUDE_HEIGHT == LOGO_OPENAI_HEIGHT,
               "Claude and OpenAI logos must be the same size");
 
-// Custom fonts (scaled for 314 PPI, ~1.9x from original 165 PPI)
-LV_FONT_DECLARE(font_tiempos_56);
-LV_FONT_DECLARE(font_tiempos_34);
-LV_FONT_DECLARE(font_styrene_48);
-LV_FONT_DECLARE(font_styrene_36);
-LV_FONT_DECLARE(font_styrene_28);
-LV_FONT_DECLARE(font_styrene_24);
-LV_FONT_DECLARE(font_styrene_20);
-LV_FONT_DECLARE(font_styrene_16);
-LV_FONT_DECLARE(font_styrene_14);
-LV_FONT_DECLARE(font_mono_32);
+// Custom fonts (scaled for 314 PPI, ~1.9x from original 165 PPI).
+// Inventory lives in fonts.h — the single source of truth for declared sizes.
+#include "fonts.h"
 
 // Layout values computed from the active board's geometry. Populated once
 // in ui_init() and treated as const for the rest of the program. Adding a
@@ -312,22 +304,20 @@ static lv_obj_t* make_bar(lv_obj_t* parent, int x, int y, int w, int h) {
     return bar;
 }
 
-static void init_icon_dsc(lv_image_dsc_t* dsc, int w, int h, const uint16_t* data) {
+// Fill an LVGL image descriptor. RGB565 is 2 bytes/px; RGB565A8 appends a
+// w*h alpha plane (3 bytes/px total — see gotcha #8). stride is the RGB565
+// row stride in both formats since the alpha plane is appended, not interleaved.
+// Contract: only RGB565 and RGB565A8 are supported — any other cf is treated
+// as 2 B/px and would produce a wrong data_size. All call sites pass one of
+// these two constants.
+static void init_icon_dsc(lv_image_dsc_t* dsc, int w, int h,
+                          const void* data, lv_color_format_t cf) {
     dsc->header.w = w;
     dsc->header.h = h;
-    dsc->header.cf = LV_COLOR_FORMAT_RGB565;
+    dsc->header.cf = cf;
     dsc->header.stride = w * 2;
     dsc->data = (const uint8_t*)data;
-    dsc->data_size = w * h * 2;
-}
-
-static void init_icon_dsc_rgb565a8(lv_image_dsc_t* dsc, int w, int h, const uint8_t* data) {
-    dsc->header.w = w;
-    dsc->header.h = h;
-    dsc->header.cf = LV_COLOR_FORMAT_RGB565A8;
-    dsc->header.stride = w * 2;
-    dsc->data = data;
-    dsc->data_size = w * h * 3;
+    dsc->data_size = w * h * (cf == LV_COLOR_FORMAT_RGB565A8 ? 3 : 2);
 }
 
 static lv_obj_t* make_pill(lv_obj_t* parent, const char* text, const lv_font_t* font) {
@@ -345,12 +335,21 @@ static lv_obj_t* make_pill(lv_obj_t* parent, const char* text, const lv_font_t* 
     return lbl;
 }
 
+// Order must match the index logic in ui_update_battery(): empty, low, medium,
+// full, charging. All RGB565A8 so the alpha plane blends over the splash art.
 static void init_battery_icons(void) {
-    init_icon_dsc_rgb565a8(&battery_dscs[0], ICON_BATTERY_W, ICON_BATTERY_H, icon_battery_data);
-    init_icon_dsc_rgb565a8(&battery_dscs[1], ICON_BATTERY_LOW_W, ICON_BATTERY_LOW_H, icon_battery_low_data);
-    init_icon_dsc_rgb565a8(&battery_dscs[2], ICON_BATTERY_MEDIUM_W, ICON_BATTERY_MEDIUM_H, icon_battery_medium_data);
-    init_icon_dsc_rgb565a8(&battery_dscs[3], ICON_BATTERY_FULL_W, ICON_BATTERY_FULL_H, icon_battery_full_data);
-    init_icon_dsc_rgb565a8(&battery_dscs[4], ICON_BATTERY_CHARGING_W, ICON_BATTERY_CHARGING_H, icon_battery_charging_data);
+    static const struct { uint16_t w, h; const uint8_t* data; } icons[] = {
+        { ICON_BATTERY_W,          ICON_BATTERY_H,          icon_battery_data },
+        { ICON_BATTERY_LOW_W,      ICON_BATTERY_LOW_H,      icon_battery_low_data },
+        { ICON_BATTERY_MEDIUM_W,   ICON_BATTERY_MEDIUM_H,   icon_battery_medium_data },
+        { ICON_BATTERY_FULL_W,     ICON_BATTERY_FULL_H,     icon_battery_full_data },
+        { ICON_BATTERY_CHARGING_W, ICON_BATTERY_CHARGING_H, icon_battery_charging_data },
+    };
+    static_assert(sizeof(icons) / sizeof(icons[0]) == sizeof(battery_dscs) / sizeof(battery_dscs[0]),
+                  "battery_dscs and the icon table must stay in sync");
+    for (size_t i = 0; i < sizeof(icons) / sizeof(icons[0]); i++)
+        init_icon_dsc(&battery_dscs[i], icons[i].w, icons[i].h,
+                      icons[i].data, LV_COLOR_FORMAT_RGB565A8);
 }
 
 // ======== Usage Screen ========
@@ -423,7 +422,7 @@ static void init_wifi_screen(lv_obj_t* scr) {
                                   L.content_w, L.bt_info_panel_h);
 
     static lv_image_dsc_t icon_wifi_dsc;
-    init_icon_dsc(&icon_wifi_dsc, ICON_WIFI_W, ICON_WIFI_H, icon_wifi_data);
+    init_icon_dsc(&icon_wifi_dsc, ICON_WIFI_W, ICON_WIFI_H, icon_wifi_data, LV_COLOR_FORMAT_RGB565);
 
     lv_obj_t* wifi_img = lv_image_create(p_info);
     lv_image_set_src(wifi_img, &icon_wifi_dsc);
@@ -496,8 +495,8 @@ void ui_init(void) {
     lv_obj_set_style_bg_color(scr, COL_BG, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
-    init_icon_dsc_rgb565a8(&logo_claude_dsc, LOGO_CLAUDE_WIDTH, LOGO_CLAUDE_HEIGHT, logo_claude_data);
-    init_icon_dsc_rgb565a8(&logo_openai_dsc, LOGO_OPENAI_WIDTH, LOGO_OPENAI_HEIGHT, logo_openai_data);
+    init_icon_dsc(&logo_claude_dsc, LOGO_CLAUDE_WIDTH, LOGO_CLAUDE_HEIGHT, logo_claude_data, LV_COLOR_FORMAT_RGB565A8);
+    init_icon_dsc(&logo_openai_dsc, LOGO_OPENAI_WIDTH, LOGO_OPENAI_HEIGHT, logo_openai_data, LV_COLOR_FORMAT_RGB565A8);
     init_battery_icons();
 
     init_provider_screen(scr, "Claude", COL_ACCENT, &claude_w);
