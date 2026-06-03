@@ -12,4 +12,4 @@ paths:
 
 ## Related decisions
 
-- `2026-06-02-static-screen-cycle` — why a fixed Splash→Claude→Codex→Bluetooth cycle with "No account" panels beats dynamic page-hiding.
+- `2026-06-02-static-screen-cycle` — why a fixed Splash→Claude→Codex→WiFi cycle with "No account" panels beats dynamic page-hiding.

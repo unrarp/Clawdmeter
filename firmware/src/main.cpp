@@ -243,6 +243,24 @@ static float max_present_session_pct(const UsageData& u) {
     return m < 0 ? 0.0f : m;   // idle default when no present provider has data
 }
 
+// Per-button edge detector. The first press from sleep is consumed as a
+// wake-only event (idle_consume_wake_press) and reports no action; subsequent
+// awake press edges report an action for the caller to handle.
+struct EdgeButton {
+    bool was = false;
+    // Pass the current held state once per loop. Returns true exactly on a
+    // press edge that should fire the button's action — never on the first
+    // press from sleep (consumed as wake-only) or on release.
+    bool action_edge(bool now) {
+        bool fire = false;
+        if (now != was) {
+            if (now && !idle_consume_wake_press()) fire = true;
+            was = now;
+        }
+        return fire;
+    }
+};
+
 void loop() {
     idle_tick();
     lv_timer_handler();
@@ -268,32 +286,16 @@ void loop() {
     // Note: HID keyboard emission (BLE) has been removed — the device is a
     // WiFi-only usage gauge.
     {
-        static bool primary_was = false;
-        static bool primary_wake_swallowed = false;
-        bool primary_now = input_hal_is_held(INPUT_BTN_PRIMARY);
-        if (primary_now != primary_was) {
-            if (primary_now) {
-                if (idle_consume_wake_press()) primary_wake_swallowed = true;
-                else net_request_refresh();  // awake press → force an immediate /usage fetch
-            } else {
-                if (primary_wake_swallowed) primary_wake_swallowed = false;
-            }
-            primary_was = primary_now;
-        }
+        static EdgeButton primary_btn;
+
+        if (primary_btn.action_edge(input_hal_is_held(INPUT_BTN_PRIMARY)))
+            net_request_refresh();  // awake press → force an immediate /usage fetch
 
         if (board_caps().button_count >= 2) {
-            static bool secondary_was = false;
-            static bool secondary_wake_swallowed = false;
-            bool secondary_now = input_hal_is_held(INPUT_BTN_SECONDARY);
-            if (secondary_now != secondary_was) {
-                if (secondary_now) {
-                    if (idle_consume_wake_press()) secondary_wake_swallowed = true;
-                    // No HID action — device is a WiFi gauge only.
-                } else {
-                    if (secondary_wake_swallowed) secondary_wake_swallowed = false;
-                }
-                secondary_was = secondary_now;
-            }
+            static EdgeButton secondary_btn;
+            // No awake action (WiFi gauge); the call still runs the wake-consume
+            // bookkeeping so the first press from sleep only wakes the panel.
+            (void)secondary_btn.action_edge(input_hal_is_held(INPUT_BTN_SECONDARY));
         }
 
         if (power_hal_pwr_pressed()) {

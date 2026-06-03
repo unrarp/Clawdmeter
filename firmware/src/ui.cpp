@@ -37,19 +37,19 @@ struct Layout {
     const lv_font_t* usage_reset_font;
 
     // WiFi screen
-    int16_t bt_info_panel_h;
-    uint16_t bt_icon_scale;  // LVGL image zoom for the status icon (256 = 100%, == LV_SCALE_NONE)
-    int16_t bt_status_x;     // x of status text, after the (possibly scaled) icon
-    int16_t bt_status_y;     // shared y for the status icon and the status label
-    int16_t bt_device_y;
-    int16_t bt_mac_y;
-    int16_t bt_rssi_y;
-    int16_t bt_daemon_y;
-    int16_t bt_age_y;
-    const lv_font_t* bt_status_font;
-    const lv_font_t* bt_device_font;  // also used for sub-lines
-    const lv_font_t* bt_credit_1_font;
-    const lv_font_t* bt_credit_2_font;
+    int16_t wifi_info_panel_h;
+    uint16_t wifi_icon_scale;  // LVGL image zoom for the status icon (256 = 100%, == LV_SCALE_NONE)
+    int16_t wifi_status_x;     // x of status text, after the (possibly scaled) icon
+    int16_t wifi_status_y;     // shared y for the status icon and the status label
+    int16_t wifi_ssid_y;
+    int16_t wifi_ip_y;
+    int16_t wifi_rssi_y;
+    int16_t wifi_daemon_y;
+    int16_t wifi_age_y;
+    const lv_font_t* wifi_status_font;
+    const lv_font_t* wifi_row_font;  // also used for sub-lines
+    const lv_font_t* wifi_credit_1_font;
+    const lv_font_t* wifi_credit_2_font;
 };
 static Layout L = {};
 
@@ -82,19 +82,19 @@ static void compute_layout(const BoardCaps& c) {
         // so the grey fills the screen like the usage page rather than
         // floating as a short box. It stops ~30px shy of where the usage
         // panels end because, unlike them, this screen has credits below.
-        L.bt_info_panel_h = 286;
-        L.bt_icon_scale = 256;   // status icon at native 48px (LV_SCALE_NONE — no transform)
-        L.bt_status_x = 56;
-        L.bt_status_y = 2;
-        L.bt_device_y = 68;
-        L.bt_mac_y = 106;
-        L.bt_rssi_y = 144;
-        L.bt_daemon_y = 182;
-        L.bt_age_y = 220;
-        L.bt_status_font   = &font_styrene_48;
-        L.bt_device_font   = &font_styrene_28;
-        L.bt_credit_1_font = &font_styrene_24;
-        L.bt_credit_2_font = &font_styrene_20;
+        L.wifi_info_panel_h = 286;
+        L.wifi_icon_scale = 256;   // status icon at native 48px (LV_SCALE_NONE — no transform)
+        L.wifi_status_x = 56;
+        L.wifi_status_y = 2;
+        L.wifi_ssid_y = 68;
+        L.wifi_ip_y = 106;
+        L.wifi_rssi_y = 144;
+        L.wifi_daemon_y = 182;
+        L.wifi_age_y = 220;
+        L.wifi_status_font   = &font_styrene_48;
+        L.wifi_row_font   = &font_styrene_28;
+        L.wifi_credit_1_font = &font_styrene_24;
+        L.wifi_credit_2_font = &font_styrene_20;
     } else {
         // Compact layout — tuned for 368x448 (AMOLED-1.8). The panel is only
         // ~7% shorter than the square, so heights/fonts stay close to the
@@ -109,19 +109,19 @@ static void compute_layout(const BoardCaps& c) {
         // Extends to ≈368 bottom — just above the credit lines — so the grey
         // matches the usage page; stops short of the usage-panel bottom (394)
         // to leave room for the two credit lines this screen has below it.
-        L.bt_info_panel_h = 258;
-        L.bt_icon_scale = 160;   // scale status icon 48px -> ~30px to match the 28px status text
-        L.bt_status_x = 44;
-        L.bt_status_y = 4;
-        L.bt_device_y = 56;
-        L.bt_mac_y = 92;
-        L.bt_rssi_y = 128;
-        L.bt_daemon_y = 164;
-        L.bt_age_y = 200;
-        L.bt_status_font   = &font_styrene_28;
-        L.bt_device_font   = &font_styrene_20;   // sub-lines; 24px overflowed the 296px inner width
-        L.bt_credit_1_font = &font_styrene_20;
-        L.bt_credit_2_font = &font_styrene_16;
+        L.wifi_info_panel_h = 258;
+        L.wifi_icon_scale = 160;   // scale status icon 48px -> ~30px to match the 28px status text
+        L.wifi_status_x = 44;
+        L.wifi_status_y = 4;
+        L.wifi_ssid_y = 56;
+        L.wifi_ip_y = 92;
+        L.wifi_rssi_y = 128;
+        L.wifi_daemon_y = 164;
+        L.wifi_age_y = 200;
+        L.wifi_status_font   = &font_styrene_28;
+        L.wifi_row_font   = &font_styrene_20;   // sub-lines; 24px overflowed the 296px inner width
+        L.wifi_credit_1_font = &font_styrene_20;
+        L.wifi_credit_2_font = &font_styrene_16;
     }
 
     L.content_w = L.scr_w - 2 * L.margin;
@@ -419,7 +419,7 @@ static void init_wifi_screen(lv_obj_t* scr) {
     make_title(wifi_container, "WiFi");
 
     lv_obj_t* p_info = make_panel(wifi_container, L.margin, L.content_y,
-                                  L.content_w, L.bt_info_panel_h);
+                                  L.content_w, L.wifi_info_panel_h);
 
     static lv_image_dsc_t icon_wifi_dsc;
     init_icon_dsc(&icon_wifi_dsc, ICON_WIFI_W, ICON_WIFI_H, icon_wifi_data, LV_COLOR_FORMAT_RGB565);
@@ -429,57 +429,57 @@ static void init_wifi_screen(lv_obj_t* scr) {
     // Only scale when the layout actually shrinks the icon (compact). Skipping
     // the call at native size avoids LVGL's per-redraw transform path on the
     // large layout; the compact layout pays it by design to match the 28px text.
-    if (L.bt_icon_scale != LV_SCALE_NONE) {
+    if (L.wifi_icon_scale != LV_SCALE_NONE) {
         lv_image_set_pivot(wifi_img, 0, 0);        // scale toward top-left so pos stays predictable
-        lv_image_set_scale(wifi_img, L.bt_icon_scale);
+        lv_image_set_scale(wifi_img, L.wifi_icon_scale);
     }
-    lv_obj_set_pos(wifi_img, 0, L.bt_status_y);
+    lv_obj_set_pos(wifi_img, 0, L.wifi_status_y);
 
     lbl_wifi_status = lv_label_create(p_info);
     lv_label_set_text(lbl_wifi_status, "Connecting\xe2\x80\xa6");
-    lv_obj_set_style_text_font(lbl_wifi_status, L.bt_status_font, 0);
+    lv_obj_set_style_text_font(lbl_wifi_status, L.wifi_status_font, 0);
     lv_obj_set_style_text_color(lbl_wifi_status, COL_DIM, 0);
-    lv_obj_set_pos(lbl_wifi_status, L.bt_status_x, L.bt_status_y);
+    lv_obj_set_pos(lbl_wifi_status, L.wifi_status_x, L.wifi_status_y);
 
     lbl_wifi_ssid = lv_label_create(p_info);
     lv_label_set_text(lbl_wifi_ssid, "SSID: ---");
-    lv_obj_set_style_text_font(lbl_wifi_ssid, L.bt_device_font, 0);
+    lv_obj_set_style_text_font(lbl_wifi_ssid, L.wifi_row_font, 0);
     lv_obj_set_style_text_color(lbl_wifi_ssid, COL_DIM, 0);
-    lv_obj_set_pos(lbl_wifi_ssid, 0, L.bt_device_y);
+    lv_obj_set_pos(lbl_wifi_ssid, 0, L.wifi_ssid_y);
 
     lbl_wifi_ip = lv_label_create(p_info);
     lv_label_set_text(lbl_wifi_ip, "IP: ---");
-    lv_obj_set_style_text_font(lbl_wifi_ip, L.bt_device_font, 0);
+    lv_obj_set_style_text_font(lbl_wifi_ip, L.wifi_row_font, 0);
     lv_obj_set_style_text_color(lbl_wifi_ip, COL_DIM, 0);
-    lv_obj_set_pos(lbl_wifi_ip, 0, L.bt_mac_y);
+    lv_obj_set_pos(lbl_wifi_ip, 0, L.wifi_ip_y);
 
     lbl_wifi_rssi = lv_label_create(p_info);
     lv_label_set_text(lbl_wifi_rssi, "Signal: ---");
-    lv_obj_set_style_text_font(lbl_wifi_rssi, L.bt_device_font, 0);
+    lv_obj_set_style_text_font(lbl_wifi_rssi, L.wifi_row_font, 0);
     lv_obj_set_style_text_color(lbl_wifi_rssi, COL_DIM, 0);
-    lv_obj_set_pos(lbl_wifi_rssi, 0, L.bt_rssi_y);
+    lv_obj_set_pos(lbl_wifi_rssi, 0, L.wifi_rssi_y);
 
     lbl_wifi_daemon = lv_label_create(p_info);
     lv_label_set_text(lbl_wifi_daemon, "Daemon: ---");
-    lv_obj_set_style_text_font(lbl_wifi_daemon, L.bt_device_font, 0);
+    lv_obj_set_style_text_font(lbl_wifi_daemon, L.wifi_row_font, 0);
     lv_obj_set_style_text_color(lbl_wifi_daemon, COL_DIM, 0);
-    lv_obj_set_pos(lbl_wifi_daemon, 0, L.bt_daemon_y);
+    lv_obj_set_pos(lbl_wifi_daemon, 0, L.wifi_daemon_y);
 
     lbl_wifi_age = lv_label_create(p_info);
     lv_label_set_text(lbl_wifi_age, "Updated: \xe2\x80\x94");
-    lv_obj_set_style_text_font(lbl_wifi_age, L.bt_device_font, 0);
+    lv_obj_set_style_text_font(lbl_wifi_age, L.wifi_row_font, 0);
     lv_obj_set_style_text_color(lbl_wifi_age, COL_DIM, 0);
-    lv_obj_set_pos(lbl_wifi_age, 0, L.bt_age_y);
+    lv_obj_set_pos(lbl_wifi_age, 0, L.wifi_age_y);
 
     lv_obj_t* lbl_credit = lv_label_create(wifi_container);
     lv_label_set_text(lbl_credit, "Built by @hermannbjorgvin");
-    lv_obj_set_style_text_font(lbl_credit, L.bt_credit_1_font, 0);
+    lv_obj_set_style_text_font(lbl_credit, L.wifi_credit_1_font, 0);
     lv_obj_set_style_text_color(lbl_credit, COL_DIM, 0);
     lv_obj_align(lbl_credit, LV_ALIGN_BOTTOM_MID, 0, -46);
 
     lv_obj_t* lbl_credit2 = lv_label_create(wifi_container);
     lv_label_set_text(lbl_credit2, "Clawd animation by @marciogranzotto");
-    lv_obj_set_style_text_font(lbl_credit2, L.bt_credit_2_font, 0);
+    lv_obj_set_style_text_font(lbl_credit2, L.wifi_credit_2_font, 0);
     lv_obj_set_style_text_color(lbl_credit2, COL_DIM, 0);
     lv_obj_align(lbl_credit2, LV_ALIGN_BOTTOM_MID, 0, -20);
 
@@ -519,68 +519,59 @@ void ui_init(void) {
     lv_obj_set_pos(battery_img, L.scr_w - ICON_BATTERY_W - L.margin, row_center_y(ICON_BATTERY_H));
 }
 
+// Render one usage "window" (pct headline + bar + reset line) as a dim
+// "--%" placeholder with the given caption (e.g. "Connecting..." or an absent
+// message). Used whenever there's no live percentage to show.
+static void set_window_placeholder(lv_obj_t* pct, lv_obj_t* bar, lv_obj_t* reset,
+                                   const char* caption) {
+    lv_label_set_text(pct, "--%");
+    lv_obj_set_style_text_color(pct, COL_DIM, 0);
+    lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+    lv_label_set_text(reset, caption);
+    lv_obj_set_style_text_color(reset, COL_DIM, 0);
+}
+
+// Render one usage window with a live percentage + reset countdown. reset_color
+// is COL_DIM when fresh, COL_STALE when the data is stale.
+static void set_window_value(lv_obj_t* pct, lv_obj_t* bar, lv_obj_t* reset,
+                             float pct_val, int reset_mins, lv_color_t reset_color) {
+    char buf[48];
+    int p = (int)(pct_val + 0.5f);
+    lv_label_set_text_fmt(pct, "%d%%", p);
+    lv_obj_set_style_text_color(pct, COL_TEXT, 0);
+    lv_bar_set_value(bar, p, LV_ANIM_ON);
+    lv_obj_set_style_bg_color(bar, pct_color(pct_val), LV_PART_INDICATOR);
+    format_reset_time(reset_mins, buf, sizeof(buf));
+    lv_label_set_text(reset, buf);
+    lv_obj_set_style_text_color(reset, reset_color, 0);
+}
+
 static void ui_update_provider(ProviderWidgets* w,
                                float session_pct, int session_reset,
                                float weekly_pct,  int weekly_reset,
                                bool present, bool ok, const char* absent_msg) {
-    char buf[48];
-
     if (!present) {
-        // Provider not subscribed — show placeholder in both windows.
-        lv_label_set_text(w->pct_session, "--%");
-        lv_obj_set_style_text_color(w->pct_session, COL_DIM, 0);
-        lv_bar_set_value(w->bar_session, 0, LV_ANIM_OFF);
-        lv_label_set_text(w->reset_session, absent_msg);
-        lv_obj_set_style_text_color(w->reset_session, COL_DIM, 0);
-
-        lv_label_set_text(w->pct_weekly, "--%");
-        lv_obj_set_style_text_color(w->pct_weekly, COL_DIM, 0);
-        lv_bar_set_value(w->bar_weekly, 0, LV_ANIM_OFF);
-        lv_label_set_text(w->reset_weekly, absent_msg);
-        lv_obj_set_style_text_color(w->reset_weekly, COL_DIM, 0);
-    } else if (session_pct < 0) {
+        // Provider not subscribed — placeholder in both windows.
+        set_window_placeholder(w->pct_session, w->bar_session, w->reset_session, absent_msg);
+        set_window_placeholder(w->pct_weekly,  w->bar_weekly,  w->reset_weekly,  absent_msg);
+        return;
+    }
+    if (session_pct < 0) {
         // Present but never polled successfully yet — connecting.
-        lv_label_set_text(w->pct_session, "--%");
-        lv_obj_set_style_text_color(w->pct_session, COL_DIM, 0);
-        lv_bar_set_value(w->bar_session, 0, LV_ANIM_OFF);
-        lv_label_set_text(w->reset_session, "Connecting...");
-        lv_obj_set_style_text_color(w->reset_session, COL_DIM, 0);
+        set_window_placeholder(w->pct_session, w->bar_session, w->reset_session, "Connecting...");
+        set_window_placeholder(w->pct_weekly,  w->bar_weekly,  w->reset_weekly,  "Connecting...");
+        return;
+    }
 
-        lv_label_set_text(w->pct_weekly, "--%");
-        lv_obj_set_style_text_color(w->pct_weekly, COL_DIM, 0);
-        lv_bar_set_value(w->bar_weekly, 0, LV_ANIM_OFF);
-        lv_label_set_text(w->reset_weekly, "Connecting...");
-        lv_obj_set_style_text_color(w->reset_weekly, COL_DIM, 0);
+    lv_color_t reset_color = ok ? COL_DIM : COL_STALE;
+    set_window_value(w->pct_session, w->bar_session, w->reset_session,
+                     session_pct, session_reset, reset_color);
+    if (weekly_pct < 0) {
+        // Defensive: session has data but weekly is the -1 sentinel.
+        set_window_placeholder(w->pct_weekly, w->bar_weekly, w->reset_weekly, "Connecting...");
     } else {
-        // Has data — render fresh numbers.
-        lv_color_t reset_color = ok ? COL_DIM : COL_STALE;
-
-        int s_pct = (int)(session_pct + 0.5f);
-        lv_label_set_text_fmt(w->pct_session, "%d%%", s_pct);
-        lv_obj_set_style_text_color(w->pct_session, COL_TEXT, 0);
-        lv_bar_set_value(w->bar_session, s_pct, LV_ANIM_ON);
-        lv_obj_set_style_bg_color(w->bar_session, pct_color(session_pct), LV_PART_INDICATOR);
-        format_reset_time(session_reset, buf, sizeof(buf));
-        lv_label_set_text(w->reset_session, buf);
-        lv_obj_set_style_text_color(w->reset_session, reset_color, 0);
-
-        if (weekly_pct < 0) {
-            // Defensive: session has data but weekly is the -1 sentinel.
-            lv_label_set_text(w->pct_weekly, "--%");
-            lv_obj_set_style_text_color(w->pct_weekly, COL_DIM, 0);
-            lv_bar_set_value(w->bar_weekly, 0, LV_ANIM_OFF);
-            lv_label_set_text(w->reset_weekly, "Connecting...");
-            lv_obj_set_style_text_color(w->reset_weekly, COL_DIM, 0);
-        } else {
-            int wk_pct = (int)(weekly_pct + 0.5f);
-            lv_label_set_text_fmt(w->pct_weekly, "%d%%", wk_pct);
-            lv_obj_set_style_text_color(w->pct_weekly, COL_TEXT, 0);
-            lv_bar_set_value(w->bar_weekly, wk_pct, LV_ANIM_ON);
-            lv_obj_set_style_bg_color(w->bar_weekly, pct_color(weekly_pct), LV_PART_INDICATOR);
-            format_reset_time(weekly_reset, buf, sizeof(buf));
-            lv_label_set_text(w->reset_weekly, buf);
-            lv_obj_set_style_text_color(w->reset_weekly, reset_color, 0);
-        }
+        set_window_value(w->pct_weekly, w->bar_weekly, w->reset_weekly,
+                         weekly_pct, weekly_reset, reset_color);
     }
 }
 
@@ -706,29 +697,13 @@ void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip,
         break;
     }
 
-    // SSID
-    {
-        static char sbuf[64];
-        snprintf(sbuf, sizeof(sbuf), "SSID: %s", (ssid && *ssid) ? ssid : "---");
-        lv_label_set_text(lbl_wifi_ssid, sbuf);
-    }
+    lv_label_set_text_fmt(lbl_wifi_ssid, "SSID: %s", (ssid && *ssid) ? ssid : "---");
+    lv_label_set_text_fmt(lbl_wifi_ip,   "IP: %s",   (ip && *ip) ? ip : "---");
 
-    // IP
-    {
-        static char ibuf[48];
-        snprintf(ibuf, sizeof(ibuf), "IP: %s", (ip && *ip) ? ip : "---");
-        lv_label_set_text(lbl_wifi_ip, ibuf);
-    }
-
-    // RSSI
-    {
-        static char rbuf[32];
-        if (state == NET_ONLINE)
-            snprintf(rbuf, sizeof(rbuf), "Signal: %d dBm", rssi);
-        else
-            snprintf(rbuf, sizeof(rbuf), "Signal: ---");
-        lv_label_set_text(lbl_wifi_rssi, rbuf);
-    }
+    if (state == NET_ONLINE)
+        lv_label_set_text_fmt(lbl_wifi_rssi, "Signal: %d dBm", rssi);
+    else
+        lv_label_set_text(lbl_wifi_rssi, "Signal: ---");
 
     // Age of the last good GET, computed once and shared by the daemon-health
     // verdict and the "Updated: …" line below. 0 means "never fetched".
@@ -759,18 +734,14 @@ void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip,
     }
 
     // Last-update age
-    {
-        static char abuf[48];
-        if (last_update_ms == 0) {
-            snprintf(abuf, sizeof(abuf), "Updated: \xe2\x80\x94");
-        } else {
-            uint32_t age_s = age_ms / 1000;
-            if (age_s < 60)
-                snprintf(abuf, sizeof(abuf), "Updated: %lus ago", (unsigned long)age_s);
-            else
-                snprintf(abuf, sizeof(abuf), "Updated: %lum ago", (unsigned long)(age_s / 60));
-        }
-        lv_label_set_text(lbl_wifi_age, abuf);
+    if (last_update_ms == 0) {
+        lv_label_set_text(lbl_wifi_age, "Updated: \xe2\x80\x94");
+    } else {
+        uint32_t age_s = age_ms / 1000;
+        if (age_s < 60)
+            lv_label_set_text_fmt(lbl_wifi_age, "Updated: %lus ago", (unsigned long)age_s);
+        else
+            lv_label_set_text_fmt(lbl_wifi_age, "Updated: %lum ago", (unsigned long)(age_s / 60));
     }
 }
 
