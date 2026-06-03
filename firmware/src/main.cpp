@@ -49,44 +49,15 @@ static void rounder_cb(lv_event_t* e) {
     display_hal_round_area(&area->x1, &area->y1, &area->x2, &area->y2);
 }
 
-// Touch policy is driven by IDLE_WAKE_ON_TOUCH:
-//   true  → a press edge while asleep wakes the device and the first touch is
-//           swallowed (mirrors the button wake-consumption); a press while
-//           awake counts as activity.
-//   false → touch never counts as activity and is fully swallowed while the
-//           panel is dark, so pets/sleeves can't wake it overnight and LVGL
-//           can't quietly toggle splash<->usage on a black panel.
+// A touch counts as activity (resets the idle timer); the event itself passes
+// straight through to LVGL. There is no screen-sleep state to wake from.
 static void my_touch_cb(lv_indev_t* indev, lv_indev_data_t* data) {
     uint16_t x, y;
     bool pressed;
     touch_hal_read(&x, &y, &pressed);
-    const bool raw_pressed = pressed;
-
-    if (IDLE_WAKE_ON_TOUCH) {
-        static bool touch_was = false;
-        static bool touch_wake_swallowed = false;
-        if (raw_pressed && !touch_was) {
-            // Press edge — consume as wake if asleep.
-            if (idle_consume_wake_press()) {
-                touch_wake_swallowed = true;
-                pressed = false;
-            }
-        } else if (!raw_pressed && touch_was) {
-            // Release edge.
-            if (touch_wake_swallowed) {
-                touch_wake_swallowed = false;
-                pressed = false;
-            }
-        } else if (raw_pressed && touch_wake_swallowed) {
-            // Held finger through wake — keep hiding until release.
-            pressed = false;
-        }
-        touch_was = raw_pressed;
-    } else if (idle_is_asleep()) {
-        pressed = false;
-    }
 
     if (pressed) {
+        idle_note_activity();
         data->point.x = x;
         data->point.y = y;
         data->state = LV_INDEV_STATE_PRESSED;
@@ -252,18 +223,30 @@ static float max_present_session_pct(const UsageData& u) {
     return m < 0 ? 0.0f : m;   // idle default when no present provider has data
 }
 
-// Per-button edge detector. The first press from sleep is consumed as a
-// wake-only event (idle_consume_wake_press) and reports no action; subsequent
-// awake press edges report an action for the caller to handle.
+// True if any substantive usage/state field differs. Deliberately ignores
+// *_reset_mins — those count down every poll, so including them would reset the
+// idle timer continuously and defeat auto-power-off.
+static bool usage_changed(const UsageData& a, const UsageData& b) {
+    for (int i = 0; i < PROVIDER_COUNT; i++) {
+        const ProviderUsage& x = a.providers[i];
+        const ProviderUsage& y = b.providers[i];
+        if (x.session_pct != y.session_pct) return true;
+        if (x.weekly_pct  != y.weekly_pct)  return true;
+        if (x.ok      != y.ok)      return true;
+        if (x.present != y.present) return true;
+        if (strcmp(x.status, y.status) != 0) return true;
+    }
+    return false;
+}
+
+// Per-button edge detector. Returns true on each press edge (and notes the
+// press as activity so it resets the idle timer); never on release.
 struct EdgeButton {
     bool was = false;
-    // Pass the current held state once per loop. Returns true exactly on a
-    // press edge that should fire the button's action — never on the first
-    // press from sleep (consumed as wake-only) or on release.
     bool action_edge(bool now) {
         bool fire = false;
         if (now != was) {
-            if (now && !idle_consume_wake_press()) fire = true;
+            if (now) { idle_note_activity(); fire = true; }
             was = now;
         }
         return fire;
@@ -271,47 +254,36 @@ struct EdgeButton {
 };
 
 void loop() {
-    idle_tick();
     lv_timer_handler();
     ui_tick_anim();
     net_tick();
     power_hal_tick();
     imu_hal_tick();
     splash_tick();
-    // Rotation transition (blank + ramp) would fight the idle fade — skip
-    // ticks while the panel is dark. A rotation that happens during sleep
-    // is detected by the next tick after wake and ramped in then.
-    if (!idle_is_asleep()) display_hal_tick();
+    display_hal_tick();
 
-    // ---- Physical buttons ----
-    //   PRIMARY   → wake-only (first press); local activity on subsequent presses
-    //   SECONDARY → wake-only (first press); local activity on subsequent presses
-    //               (only if the board has a secondary button)
-    //   PWR       → cycle screens; on splash, cycle animations
-    // First press from sleep is consumed as a wake-only event by
-    // idle_consume_wake_press(); the normal action fires from the second
-    // press. Activity bookkeeping happens inside idle_consume_wake_press
-    // so no separate idle_note_activity() call is needed here.
+    // ---- Physical buttons ---- (each press resets the idle timer)
+    //   PRIMARY   → force an immediate /usage refresh
+    //   SECONDARY → no action (WiFi gauge); only present on some boards
+    //   PWR       → short press cycles screens (on splash, cycles animations);
+    //               a long hold powers the device off in hardware (AXP PWRON).
     // Note: HID keyboard emission (BLE) has been removed — the device is a
     // WiFi-only usage gauge.
     {
         static EdgeButton primary_btn;
 
         if (primary_btn.action_edge(input_hal_is_held(INPUT_BTN_PRIMARY)))
-            net_request_refresh();  // awake press → force an immediate /usage fetch
+            net_request_refresh();
 
         if (board_caps().button_count >= 2) {
             static EdgeButton secondary_btn;
-            // No awake action (WiFi gauge); the call still runs the wake-consume
-            // bookkeeping so the first press from sleep only wakes the panel.
             (void)secondary_btn.action_edge(input_hal_is_held(INPUT_BTN_SECONDARY));
         }
 
         if (power_hal_pwr_pressed()) {
-            if (!idle_consume_wake_press()) {
-                if (ui_get_current_screen() == SCREEN_SPLASH) splash_next();
-                else                                          ui_cycle_screen();
-            }
+            idle_note_activity();
+            if (ui_get_current_screen() == SCREEN_SPLASH) splash_next();
+            else                                          ui_cycle_screen();
         }
     }
 
@@ -347,7 +319,10 @@ void loop() {
     check_serial_cmd();
 
     if (net_has_data()) {
-        if (parse_json(net_get_data(), &usage)) {
+        UsageData fresh = {};
+        if (parse_json(net_get_data(), &fresh)) {
+            if (usage_changed(usage, fresh)) idle_note_activity();  // real change = activity
+            usage = fresh;
             int   g_before  = usage_rate_group();
             float max_pct   = max_present_session_pct(usage);
             usage_rate_sample(max_pct);
@@ -363,6 +338,10 @@ void loop() {
         }
         // No ack/nack — HTTP pull has no acknowledgement mechanism.
     }
+
+    // Runs last so this iteration's button/touch/data activity is registered
+    // before the inactivity timeout is evaluated.
+    idle_tick();
 
     delay(5);
 }

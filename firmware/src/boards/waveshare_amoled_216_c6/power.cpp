@@ -76,3 +76,5 @@ bool power_hal_pwr_pressed(void) {
     }
     return false;
 }
+
+void power_hal_shutdown(void) { pmu.shutdown(); }

@@ -20,3 +20,6 @@ int  power_hal_battery_pct(void) { return -1; }
 bool power_hal_is_charging(void) { return false; }
 bool power_hal_is_vbus_in(void)  { return false; }
 bool power_hal_pwr_pressed(void) { return false; }
+// No PMU to cut power — log so a new port doesn't look like a silent hang when
+// the idle timeout fires (it will keep calling this every loop with no effect).
+void power_hal_shutdown(void) { Serial.println("power_hal_shutdown: no PMU on this board (no-op)"); }

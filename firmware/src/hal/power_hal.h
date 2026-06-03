@@ -17,3 +17,8 @@ bool power_hal_is_vbus_in(void);   // USB cable present (true even without a bat
 
 // Edge-triggered: returns true once per PWR short-press, then clears.
 bool power_hal_pwr_pressed(void);
+
+// Power the device fully off. On PMU-equipped boards this cuts every rail via
+// the AXP2101 (true off, ~µA); waking is a PWR/PWRON key press (a full reboot).
+// Boards without a PMU implement this as a no-op.
+void power_hal_shutdown(void);

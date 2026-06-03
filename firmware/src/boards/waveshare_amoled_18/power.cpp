@@ -11,6 +11,7 @@
 #define BATTERY_POLL_MS  2000
 #define CHARGING_POLL_MS 500
 #define PWR_POLL_MS      50
+#define PWR_SHORT_PRESS_MAX_MS 1000
 
 static XPowersPMU pmu;
 
@@ -19,6 +20,10 @@ static bool     cached_charging  = false;
 static bool     cached_vbus      = false;
 static bool     pwr_pressed_flag = false;
 static bool     last_pwr_state   = false;   // edge detector for EXIO4
+// Set on every press edge before any release edge can fire (the release branch
+// is gated on last_pwr_state, which only a press sets true) — so the initial 0
+// is never read by the short-press test.
+static uint32_t pwr_press_started = 0;
 static uint32_t last_battery_ms  = 0;
 static uint32_t last_charging_ms = 0;
 static uint32_t last_pwr_ms      = 0;
@@ -55,7 +60,12 @@ void power_hal_tick(void) {
         last_pwr_ms = now;
         bool pwr_now = io_expander_get(IOX_PIN_PWR_BTN);
         if (pwr_now && !last_pwr_state) {
-            pwr_pressed_flag = true;
+            pwr_press_started = now;             // press edge — start timing
+        } else if (!pwr_now && last_pwr_state) {
+            // Release edge: only a SHORT press cycles screens. A long hold is a
+            // power-off gesture (AXP cuts power in hardware via PWRON), so we
+            // must not also fire the screen-cycle action on the way down.
+            if (now - pwr_press_started < PWR_SHORT_PRESS_MAX_MS) pwr_pressed_flag = true;
         }
         last_pwr_state = pwr_now;
     }
@@ -72,3 +82,5 @@ bool power_hal_pwr_pressed(void) {
     }
     return false;
 }
+
+void power_hal_shutdown(void) { pmu.shutdown(); }
