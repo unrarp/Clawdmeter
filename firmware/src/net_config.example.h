@@ -1,8 +1,8 @@
 #pragma once
 #define WIFI_SSID          "your-ssid"
 #define WIFI_PASSWORD      "your-password"
-#define DAEMON_HOST        "my-laptop.local"     // mDNS <hostname>.local (incl. .local suffix), or a literal IP
-#define DAEMON_PORT        8080
+#define DAEMON_HOST        "my-laptop.local"     // UNUSED in Phase 3a (device-direct TLS); becomes the broker host in 3b
+#define DAEMON_PORT        8080                   // UNUSED in Phase 3a; becomes the broker port in 3b
 #define FETCH_INTERVAL_MS  60000              // device → daemon poll cadence; daemon refreshes upstream every ~5 min regardless
 
 // Wall-clock time for the WiFi page's "Updated: HH:MM" line. The device has no
@@ -11,3 +11,11 @@
 // Examples: US Eastern "EST5EDT,M3.2.0,M11.1.0", Central Europe "CET-1CEST,M3.5.0,M10.5.0/3".
 #define NTP_SERVER         "pool.ntp.org"
 #define NTP_TZ             "GMT0BST,M3.5.0/1,M10.5.0"
+
+// Phase 3a: device-direct provider tokens (hardcoded for now; Phase 3b fetches
+// them from the broker instead). Claude = any inference-scoped OAuth token
+// (`claude setup-token`); Codex = tokens.access_token + tokens.account_id from
+// ~/.codex/auth.json. NOT a platform sk-ant-api key.
+#define CLAUDE_TOKEN       "sk-ant-oat01-..."
+#define CODEX_ACCESS_TOKEN "eyJhbG..."
+#define CODEX_ACCOUNT_ID   "00000000-0000-0000-0000-000000000000"

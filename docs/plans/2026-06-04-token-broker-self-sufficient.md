@@ -19,8 +19,10 @@ Tick as each lands with its verification.
 - [x] **2. Broker** — DONE (`daemon/token_broker.py`, 2026-06-04). `/tokens` +
       `/healthz`, `X-Broker-Key`-gated; pass-through (no OAuth/refresh), Codex
       JWT-`exp` gate; 200/403/409 + refuse-without-key all curl-verified
-- [ ] **3a. Firmware data path** — TLS provider clients + on-device 14-key synthesis,
-      **hardcoded** tokens; real usage renders (verify via `screenshot.sh`)
+- [x] **3a. Firmware data path** — DONE (`net.cpp` rewrite, 2026-06-04). Two
+      `WiFiClientSecure` provider fetches (one per tick, round-robin) synthesize the
+      14-key JSON; `main.cpp`/UI unchanged. On-device: Claude 25%/63%, Codex
+      17%/3% rendered (screenshot-verified); both providers 200 over cert-validated TLS.
 - [ ] **3b. Firmware token plumbing** — `token_store` (NVS) + `/tokens` fetch +
       `401`-refetch / back-off / per-source health states
 - [ ] **4. Docs + lockstep cutover** — doc sweep + combined daemon+firmware flash
@@ -321,6 +323,10 @@ These currently describe the old poller and will be wrong/misleading:
 - `README.md`, `AGENTS.md`, `CLAUDE.md` — `/usage` poller / HTTP protocol table.
 - `daemon/install.sh`, `daemon/install-mac.sh` — printed `/usage` URL.
 - `firmware/tools/mdns_spike/include/spike_config.h` — `HTTP_TEST_PATH "/usage"`.
+- `.claude/rules/networking.md` — "polls `/usage`" + the `hostByName()`/mDNS bullets
+  (the resolver path was removed in 3a; device now does device-direct TLS).
+- `firmware/src/net_config.example.h` — `DAEMON_HOST`/`DAEMON_PORT` (unused in 3a,
+  repurposed as broker host/port in 3b).
 
 ## Related
 
