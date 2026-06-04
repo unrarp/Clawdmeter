@@ -21,6 +21,7 @@ firmware/src/splash_animations.h
 
 # WiFi/daemon-host secrets — keep local, never commit
 firmware/tools/mdns_spike/include/spike_config.h
+firmware/tools/tls_spike/include/spike_config.h
 firmware/src/net_config.h
 
 # Mac daemon venv

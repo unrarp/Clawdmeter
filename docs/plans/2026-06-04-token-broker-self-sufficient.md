@@ -13,8 +13,9 @@ tags: [self-sufficiency, oauth, token-broker, daemon, tls, firmware, usage]
 Build in units, not one go (see [Implementation phases](#implementation-phases)).
 Tick as each lands with its verification.
 
-- [ ] **1. TLS spike** (gate, throwaway) — `WiFiClientSecure` to both hosts,
-      Claude header-scrape, Codex GET, forced-`401`, on real ESP32-S3
+- [x] **1. TLS spike** (gate) — PASS on ESP32-S3 (`firmware/tools/tls_spike`,
+      2026-06-04): cert-bundle-validated TLS to both hosts, Claude header-scrape,
+      Codex JSON parse, forced-`401` all green
 - [ ] **2. Broker** (no hardware) — `/tokens` + `/healthz` + `409` + `X-Broker-Key`;
       `curl`-verified against real laptop creds
 - [ ] **3a. Firmware data path** — TLS provider clients + on-device 14-key synthesis,
@@ -265,6 +266,12 @@ Each unit is independently verifiable; don't merge them as one big-bang change.
    Codex GET, and a forced-`401`. Confirm header collection + cert handling.
    **If it fails, stop and rethink the firmware approach — do not start the
    rewrite.**
+   *Result (2026-06-04, `firmware/tools/tls_spike`): PASS.* Cert validation via
+   the core's embedded FULL bundle — two-arg
+   `setCACertBundle(_binary_x509_crt_bundle_start, end-start)`, covers both
+   hosts; build RAM 14% / flash 34%. **For 3a's wire mapping:** Claude
+   `unified-{5h,7d}-utilization` is a 0–1 fraction with **epoch** `-reset`;
+   Codex `used_percent` is integer percent with **relative** `reset_after_seconds`.
 2. **Broker** *(no hardware)*. Swap the poller for `/tokens` + `/healthz` +
    the `409`/needs-action paths, gated on `X-Broker-Key`. Verify end-to-end with
    `curl` against the real laptop creds.
