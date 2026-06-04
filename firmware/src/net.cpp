@@ -1,5 +1,7 @@
 #include "net.h"
 #include "net_config.h"
+#include "data.h"
+#include "token_store.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -14,6 +16,11 @@
 #ifndef NTP_TZ
 #define NTP_TZ "GMT0BST,M3.5.0/1,M10.5.0"  // UK (GMT/BST)
 #endif
+// Pre-shared secret the broker requires (X-Broker-Key). Fallback keeps the build
+// alive on a stale net_config.h; an empty key just earns a 403 at runtime.
+#ifndef BROKER_KEY
+#define BROKER_KEY ""
+#endif
 
 // Embedded full root-CA bundle (200 CAs) from the core's libmbedtls.a — used to
 // validate TLS to api.anthropic.com and chatgpt.com. Two-arg setCACertBundle on
@@ -21,7 +28,7 @@
 extern const uint8_t x509_crt_bundle_start[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t x509_crt_bundle_end[]   asm("_binary_x509_crt_bundle_end");
 
-// Provider endpoints (device-direct, Phase 3a).
+// Provider endpoints (device-direct).
 #define ANTHROPIC_URL "https://api.anthropic.com/v1/messages"
 #define CODEX_URL     "https://chatgpt.com/backend-api/wham/usage"
 #define HTTP_CONNECT_TIMEOUT 6000  // TCP SYN-ACK cap (ms)
@@ -57,6 +64,17 @@ struct Slot {
 static Slot s_claude = {-1, -1, -1, -1, "allowed", false};
 static Slot s_codex  = {-1, -1, -1, -1, "unknown", false};
 
+// Per-provider credential cache (loaded from NVS, refreshed from the broker).
+// The Codex access_token is a JWT (~2 KB observed) — size the buffer generously.
+static char s_claude_token[256];
+static char s_codex_token[2400];
+static char s_codex_account[64];
+
+// Per-provider token lifecycle. need_fetch drives a broker /tokens round-trip.
+enum TokenState { TOK_MISSING, TOK_OK, TOK_NEEDS_ACTION };
+static TokenState s_tok[PROVIDER_COUNT];
+static bool       s_need_fetch[PROVIDER_COUNT];
+
 // Per-provider fetch scheduling. One blocking TLS call per tick (round-robin),
 // so two providers never chain two handshakes in a single loop iteration.
 static uint32_t s_claude_last_fetch = 0;
@@ -65,6 +83,14 @@ static uint32_t s_codex_last_fetch  = 0;
 // cleared as each is serviced).
 static bool     s_force_claude      = false;
 static bool     s_force_codex       = false;
+
+// Broker (token source) reachability. Resolved once per session; /tokens calls
+// are throttled to FETCH_INTERVAL_MS so a rejected/expired token can't storm.
+static IPAddress s_broker_ip;
+static bool      s_broker_resolved   = false;
+static bool      s_broker_attempted  = false;  // have we tried /tokens since boot?
+static bool      s_broker_reachable  = false;  // did the last attempt get a reply?
+static uint32_t  s_broker_last_attempt = 0;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -80,8 +106,9 @@ static int epoch_to_mins(long epoch) {
 }
 
 // Build the compact 14-key JSON from both slots into s_data_buf and flag it for
-// main.cpp to re-parse. present (sp/cp) is always true in 3a — tokens are
-// configured locally; ok/cok carry per-provider fetch success.
+// main.cpp to re-parse. present (sp/cp) is always true — the device always shows
+// a panel per provider; a needs-action provider is surfaced via the WiFi-page
+// health verdict, not by blanking its panel. ok/cok carry per-provider success.
 static void synthesize_payload(void) {
     char buf[sizeof(s_data_buf)];
     snprintf(buf, sizeof(buf),
@@ -103,6 +130,117 @@ static void synthesize_payload(void) {
 static void configure_tls(WiFiClientSecure &c) {
     c.setCACertBundle(x509_crt_bundle_start,
                       (size_t)(x509_crt_bundle_end - x509_crt_bundle_start));
+}
+
+// ---------------------------------------------------------------------------
+// Token broker (plain HTTP on the trusted LAN)
+// ---------------------------------------------------------------------------
+
+// Resolve the broker host once and cache the IP. hostByName() blocks the loop
+// for the full DNS timeout (see .claude/rules/networking.md) — only ever called
+// here, and only when a token (re)fetch is actually due, never per-tick.
+static bool resolve_broker(void) {
+    if (s_broker_resolved) return true;
+    IPAddress ip;
+    if (WiFi.hostByName(DAEMON_HOST, ip) == 1) {
+        s_broker_ip = ip;
+        s_broker_resolved = true;
+        Serial.printf("[net] broker %s -> %s\n", DAEMON_HOST, ip.toString().c_str());
+        return true;
+    }
+    Serial.printf("[net] broker resolve failed: %s\n", DAEMON_HOST);
+    return false;
+}
+
+// Apply one provider object from the /tokens response. A "token" field means the
+// credential is usable (cache it, mark OK, kick a fetch); a "needs_action" field
+// means the user must re-auth (mark NEEDS_ACTION and stop refetching). An absent
+// provider key leaves prior state but clears need_fetch so we don't hammer.
+static void apply_token(int prov, JsonVariantConst o,
+                        char* tok, size_t tok_sz, char* acct, size_t acct_sz) {
+    const char* t = o["token"] | (const char*)nullptr;
+    if (t && *t) {
+        strlcpy(tok, t, tok_sz);
+        if (acct) strlcpy(acct, o["account_id"] | "", acct_sz);
+        token_store_save(prov, tok, acct);  // cache to NVS for the next boot
+        s_tok[prov] = TOK_OK;
+        s_need_fetch[prov] = false;
+        if (prov == PROV_CLAUDE) s_force_claude = true;
+        else if (prov == PROV_CODEX) s_force_codex = true;
+        Serial.printf("[net] broker token ok: prov=%d\n", prov);
+    } else if (!o["needs_action"].isNull()) {
+        // Explicit needs-action: the user must re-auth. Evict the dead credential
+        // from RAM *and* NVS so a reboot can't reload it and replay a guaranteed
+        // 401 before rediscovering this state.
+        token_store_clear(prov);
+        tok[0] = '\0';
+        if (acct) acct[0] = '\0';
+        s_tok[prov] = TOK_NEEDS_ACTION;
+        s_need_fetch[prov] = false;
+        Serial.printf("[net] broker needs_action prov=%d: %s\n",
+                      prov, (const char*)(o["needs_action"] | "?"));
+    } else {
+        // Provider key absent or malformed (shouldn't happen per the broker
+        // contract). Leave need_fetch as-is so the throttled retry tries again
+        // rather than silently stranding the provider as needs-action.
+        Serial.printf("[net] broker: no usable field for prov=%d\n", prov);
+    }
+}
+
+// One blocking GET to the broker's /tokens. The caller gates cadence; this just
+// performs the round-trip and updates per-provider token state. 200 and 409 both
+// carry usable per-provider data (409 = at least one provider needs action).
+static void fetch_tokens(void) {
+    s_broker_reachable = false;
+    if (!resolve_broker()) return;
+
+    WiFiClient client;
+    HTTPClient http;
+    http.setConnectTimeout(HTTP_CONNECT_TIMEOUT);
+    http.setTimeout(HTTP_READ_TIMEOUT);
+    char url[80];  // "http://" + IP (≤39 for IPv6) + ":port" + "/tokens" + NUL
+    snprintf(url, sizeof(url), "http://%s:%u/tokens",
+             s_broker_ip.toString().c_str(), (unsigned)DAEMON_PORT);
+    if (!http.begin(client, url)) {
+        Serial.println("[net] broker begin() failed");
+        http.end();
+        return;
+    }
+    http.addHeader("X-Broker-Key", BROKER_KEY);
+    int code = http.GET();
+    if (code != 200 && code != 409) {
+        Serial.printf("[net] broker /tokens -> %d\n", code);
+        http.end();
+        return;
+    }
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, http.getStream());
+    http.end();
+    if (err) {
+        Serial.printf("[net] broker bad body: %s\n", err.c_str());
+        return;
+    }
+    // Parseable reply = broker is reachable (clears DAEMON_BROKER_DOWN).
+    s_broker_reachable = true;
+    apply_token(PROV_CLAUDE, doc["claude"], s_claude_token, sizeof(s_claude_token), nullptr, 0);
+    apply_token(PROV_CODEX,  doc["codex"],  s_codex_token,  sizeof(s_codex_token),
+                s_codex_account, sizeof(s_codex_account));
+}
+
+// ---------------------------------------------------------------------------
+// Provider fetches
+// ---------------------------------------------------------------------------
+
+// A provider token was rejected: flag it for a broker refetch. Cadence is gated
+// by s_broker_last_attempt (see net_tick), so a persistently-bad token yields at
+// most one broker call + one provider call per FETCH_INTERVAL_MS, never a storm.
+static void on_auth_reject(int prov, int code) {
+    // Mark the token unusable so the provider-due guard stops calling the API
+    // with the rejected credential during the throttle window; the broker
+    // refetch is what restores TOK_OK.
+    s_tok[prov] = TOK_MISSING;
+    s_need_fetch[prov] = true;
+    Serial.printf("[net] prov=%d auth %d — will refetch token\n", prov, code);
 }
 
 // Claude: POST a 1-token message and scrape the unified rate-limit headers.
@@ -127,7 +265,7 @@ static void fetch_claude(void) {
         "anthropic-ratelimit-unified-status",
     };
     http.collectHeaders(keep, sizeof(keep) / sizeof(keep[0]));
-    http.addHeader("Authorization", String("Bearer ") + CLAUDE_TOKEN);
+    http.addHeader("Authorization", String("Bearer ") + s_claude_token);
     http.addHeader("anthropic-version", "2023-06-01");
     http.addHeader("anthropic-beta", "oauth-2025-04-20");
     http.addHeader("Content-Type", "application/json");
@@ -135,6 +273,12 @@ static void fetch_claude(void) {
         "{\"model\":\"claude-haiku-4-5-20251001\",\"max_tokens\":1,"
         "\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}";
     int code = http.POST(body);
+    if (code == 401 || code == 403) {
+        on_auth_reject(PROV_CLAUDE, code);
+        s_claude.ok = false;
+        http.end();
+        return;
+    }
     String u5 = http.header("anthropic-ratelimit-unified-5h-utilization");
     String u7 = http.header("anthropic-ratelimit-unified-7d-utilization");
     if (code == 200 && u5.length() && u7.length()) {
@@ -170,10 +314,16 @@ static void fetch_codex(void) {
         http.end();
         return;
     }
-    http.addHeader("Authorization", String("Bearer ") + CODEX_ACCESS_TOKEN);
-    http.addHeader("ChatGPT-Account-Id", CODEX_ACCOUNT_ID);
+    http.addHeader("Authorization", String("Bearer ") + s_codex_token);
+    http.addHeader("ChatGPT-Account-Id", s_codex_account);
     http.addHeader("User-Agent", "clawdmeter");
     int code = http.GET();
+    if (code == 401 || code == 403) {
+        on_auth_reject(PROV_CODEX, code);
+        s_codex.ok = false;
+        http.end();
+        return;
+    }
     if (code == 200) {
         JsonDocument doc;
         DeserializationError err = deserializeJson(doc, http.getStream());
@@ -216,9 +366,28 @@ void net_init(void) {
     s_force_codex     = false;
     s_claude_last_fetch = 0;
     s_codex_last_fetch  = 0;
+    s_broker_resolved   = false;
+    s_broker_attempted  = false;
+    s_broker_reachable  = false;
+    s_broker_last_attempt = 0;
     s_data_buf[0]     = '\0';
     s_ssid_buf[0]     = '\0';
     s_ip_buf[0]       = '\0';
+    s_claude_token[0]  = '\0';
+    s_codex_token[0]   = '\0';
+    s_codex_account[0] = '\0';
+
+    // Load cached credentials from NVS. A provider with a stored token starts
+    // ready; a missing one starts MISSING and pulls from the broker once online.
+    token_store_init();
+    for (int i = 0; i < PROVIDER_COUNT; i++) { s_tok[i] = TOK_MISSING; s_need_fetch[i] = true; }
+    if (token_store_load(PROV_CLAUDE, s_claude_token, sizeof(s_claude_token), nullptr, 0)) {
+        s_tok[PROV_CLAUDE] = TOK_OK; s_need_fetch[PROV_CLAUDE] = false;
+    }
+    if (token_store_load(PROV_CODEX, s_codex_token, sizeof(s_codex_token),
+                         s_codex_account, sizeof(s_codex_account))) {
+        s_tok[PROV_CODEX] = TOK_OK; s_need_fetch[PROV_CODEX] = false;
+    }
 
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -235,6 +404,9 @@ void net_tick(void) {
         Serial.println("[net] WiFi lost — NET_DISCONNECTED");
         s_state     = NET_DISCONNECTED;
         s_ip_buf[0] = '\0';
+        // The cached broker IP is a per-association DNS result — drop it so a
+        // reconnect (DHCP churn, host moved, roam) re-resolves DAEMON_HOST.
+        s_broker_resolved = false;
         return;
     }
 
@@ -249,6 +421,9 @@ void net_tick(void) {
         // in the association-transition tick.
         s_force_claude = true;
         s_force_codex  = true;
+        // Re-arm the broker so a pending token (re)fetch fires promptly after
+        // (re)association instead of waiting out the pre-drop throttle window.
+        s_broker_attempted = false;
         return;
     }
 
@@ -266,13 +441,31 @@ void net_tick(void) {
 
     if (s_state != NET_ONLINE) return;
 
-    // --- Fetch at most ONE provider this tick (one blocking TLS call max) -----
-    // Claude takes priority on a tick where both are due; Codex gets the next
-    // tick. After the initial both-due burst they settle one tick apart, each
-    // still polling every FETCH_INTERVAL_MS.
     uint32_t now = millis();
-    bool claude_due = s_force_claude || (now - s_claude_last_fetch) >= (uint32_t)FETCH_INTERVAL_MS;
-    bool codex_due  = s_force_codex  || (now - s_codex_last_fetch)  >= (uint32_t)FETCH_INTERVAL_MS;
+
+    // --- Token (re)fetch takes priority for the tick -------------------------
+    // If either provider needs a credential and the broker cadence allows, do
+    // the one blocking /tokens call and bail — never chain it with a provider
+    // TLS handshake in the same tick. The first attempt fires immediately; after
+    // that it's throttled to FETCH_INTERVAL_MS so a rejected token can't storm.
+    bool need = s_need_fetch[PROV_CLAUDE] || s_need_fetch[PROV_CODEX];
+    bool broker_due = need && (!s_broker_attempted ||
+                               (now - s_broker_last_attempt) >= (uint32_t)FETCH_INTERVAL_MS);
+    if (broker_due) {
+        s_broker_attempted   = true;
+        s_broker_last_attempt = now;
+        fetch_tokens();
+        return;
+    }
+
+    // --- Otherwise fetch at most ONE provider with a usable token ------------
+    // Claude takes priority on a tick where both are due; Codex gets the next.
+    // A provider without a usable token is skipped (its data stays "Connecting…"
+    // / last-good); the broker path above is what recovers it.
+    bool claude_due = s_tok[PROV_CLAUDE] == TOK_OK &&
+        (s_force_claude || (now - s_claude_last_fetch) >= (uint32_t)FETCH_INTERVAL_MS);
+    bool codex_due  = s_tok[PROV_CODEX] == TOK_OK &&
+        (s_force_codex  || (now - s_codex_last_fetch)  >= (uint32_t)FETCH_INTERVAL_MS);
 
     if (claude_due) {
         fetch_claude();
@@ -296,7 +489,16 @@ const char* net_get_data(void) {
     return s_data_buf;
 }
 
-void net_request_refresh(void) { s_force_claude = true; s_force_codex = true; }
+void net_request_refresh(void) {
+    s_force_claude = true;
+    s_force_codex  = true;
+    // A manual refresh also retries any provider that went needs-action (e.g.
+    // after the user re-ran `claude setup-token` / codex) and lets the broker be
+    // hit immediately rather than waiting out the throttle.
+    for (int i = 0; i < PROVIDER_COUNT; i++)
+        if (s_tok[i] == TOK_NEEDS_ACTION) s_need_fetch[i] = true;
+    s_broker_attempted = false;
+}
 
 const char* net_get_ssid(void) { return s_ssid_buf; }
 const char* net_get_ip(void)   { return s_ip_buf; }
@@ -304,11 +506,16 @@ int         net_get_rssi(void) { return WiFi.RSSI(); }
 uint32_t    net_last_update_ms(void) { return s_last_update_ms; }
 
 daemon_health_t net_daemon_health(void) {
-    // NOTE (Phase 3b): single verdict off the last *any-provider* success — if one
-    // provider succeeds and the other is dead forever, this still reports
-    // CONNECTED (the per-provider `ok`/`cok` flags carry the real state to the UI).
-    // Phase 3b adds a per-source health model.
+    // Aggregate verdict across both providers. Auth/token problems outrank the
+    // data-freshness states: they're actionable and explain missing data. The
+    // per-provider ok/cok flags still carry each provider's own state to its
+    // panel, so a one-provider problem doesn't blank the healthy one's numbers.
     if (s_state != NET_ONLINE) return DAEMON_OFFLINE;
+    if (s_tok[PROV_CLAUDE] == TOK_NEEDS_ACTION || s_tok[PROV_CODEX] == TOK_NEEDS_ACTION)
+        return DAEMON_NEEDS_ACTION;
+    bool need = s_need_fetch[PROV_CLAUDE] || s_need_fetch[PROV_CODEX];
+    if (need && s_broker_attempted && !s_broker_reachable) return DAEMON_BROKER_DOWN;
+    if (need) return DAEMON_NO_TOKEN;
     if (s_last_update_ms == 0)  return DAEMON_NO_DATA;
     if (millis() - s_last_update_ms <= DAEMON_STALE_MS) return DAEMON_CONNECTED;
     return DAEMON_STALE;

@@ -23,8 +23,18 @@ Tick as each lands with its verification.
       `WiFiClientSecure` provider fetches (one per tick, round-robin) synthesize the
       14-key JSON; `main.cpp`/UI unchanged. On-device: Claude 25%/63%, Codex
       17%/3% rendered (screenshot-verified); both providers 200 over cert-validated TLS.
-- [ ] **3b. Firmware token plumbing** — `token_store` (NVS) + `/tokens` fetch +
-      `401`-refetch / back-off / per-source health states
+- [x] **3b. Firmware token plumbing** — DONE (2026-06-04). New `token_store`
+      (NVS/`Preferences`) module; `net.cpp` loads cached tokens on boot, pulls
+      from the broker `GET /tokens` (`X-Broker-Key`) when a provider's token is
+      missing/rejected, caches to NVS, and gates the broker call to one blocking
+      round-trip per tick throttled to `FETCH_INTERVAL_MS` (no storm). Provider
+      `401/403` → refetch; `409`/needs-action → stop refetching that provider,
+      keep the other. Health model extended to per-source aggregate
+      (`NEEDS_ACTION`/`BROKER_DOWN`/`NO_TOKEN` + the existing data-freshness
+      states). Hardcoded tokens removed from `net_config*.h`; `BROKER_KEY` added.
+      **Verified:** both envs build (`216` + `18`). **Not yet runtime-tested:**
+      empty-NVS boot → broker fetch → render and the `401`-refetch path need a
+      live broker on the device's port + a flash — folded into the 4 cutover.
 - [ ] **4. Docs + lockstep cutover** — doc sweep + combined daemon+firmware flash
 
 Ordering: 1 before 3 (gate); 2 before 3b; 4 last. 2 and 3a are independent

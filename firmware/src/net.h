@@ -3,15 +3,23 @@
 
 typedef enum { NET_DISCONNECTED, NET_CONNECTING, NET_ONLINE } net_state_t;
 
-// Derived daemon reachability, classified from net state + last-good-GET age.
-// Polled cheaply each loop so the WiFi page repaints only on a transition
-// (the verdict is elapsed-time based, so it must be evaluated over time — but
-// without a periodic UI redraw).
+// Derived data/auth health, classified from net state, token state, broker
+// reachability, and last-good-fetch age. Polled cheaply each loop so the WiFi
+// page repaints only on a transition (some verdicts are elapsed-time based, so
+// they must be evaluated over time — but without a periodic UI redraw).
+//
+// Aggregate across both providers (priority order in net_daemon_health): an
+// auth/token problem on either provider outranks the data-freshness verdict,
+// since it explains why data may be missing and needs the user. The per-provider
+// ok/cok flags on the wire still carry each provider's own state to its panel.
 typedef enum {
-    DAEMON_OFFLINE,    // WiFi not online — can't say anything about the daemon
-    DAEMON_NO_DATA,    // online, but no good /usage body has ever landed
-    DAEMON_CONNECTED,  // last good GET is within the staleness window
-    DAEMON_STALE,      // last good GET is older than the staleness window
+    DAEMON_OFFLINE,      // WiFi not online — can't say anything about data/broker
+    DAEMON_NEEDS_ACTION, // broker said 409 — user must re-auth a provider (run claude setup-token / codex)
+    DAEMON_BROKER_DOWN,  // a token is needed but the broker is unreachable
+    DAEMON_NO_TOKEN,     // online, fetching tokens from the broker (none cached yet)
+    DAEMON_NO_DATA,      // tokens in hand, but no good provider fetch has ever landed
+    DAEMON_CONNECTED,    // last good provider fetch is within the staleness window
+    DAEMON_STALE,        // last good provider fetch is older than the staleness window
 } daemon_health_t;
 
 void        net_init(void);            // WiFi.begin() with creds from net_config.h

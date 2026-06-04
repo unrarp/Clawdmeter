@@ -714,6 +714,18 @@ void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip,
         lv_label_set_text(lbl_wifi_daemon, "Daemon: ---");
         lv_obj_set_style_text_color(lbl_wifi_daemon, COL_DIM, 0);
         break;
+    case DAEMON_NEEDS_ACTION:
+        lv_label_set_text(lbl_wifi_daemon, "Daemon: needs login");
+        lv_obj_set_style_text_color(lbl_wifi_daemon, COL_RED, 0);
+        break;
+    case DAEMON_BROKER_DOWN:
+        lv_label_set_text(lbl_wifi_daemon, "Daemon: broker down");
+        lv_obj_set_style_text_color(lbl_wifi_daemon, COL_RED, 0);
+        break;
+    case DAEMON_NO_TOKEN:
+        lv_label_set_text(lbl_wifi_daemon, "Daemon: getting tokens\xe2\x80\xa6");
+        lv_obj_set_style_text_color(lbl_wifi_daemon, COL_AMBER, 0);
+        break;
     case DAEMON_NO_DATA:
         lv_label_set_text(lbl_wifi_daemon, "Daemon: no data");
         lv_obj_set_style_text_color(lbl_wifi_daemon, COL_RED, 0);
