@@ -17,5 +17,5 @@ void ui_show_screen(screen_t screen);
 void ui_cycle_screen(void);
 void ui_toggle_splash(void);
 screen_t ui_get_current_screen(void);
-void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip, int rssi, uint32_t last_update_ms, daemon_health_t daemon_health);
+void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip, uint32_t last_update_ms, usage_health_t claude_health, usage_health_t codex_health);
 void ui_update_battery(int percent, bool charging);

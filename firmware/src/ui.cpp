@@ -44,8 +44,8 @@ struct Layout {
     int16_t wifi_status_y;     // shared y for the status icon and the status label
     int16_t wifi_ssid_y;
     int16_t wifi_ip_y;
-    int16_t wifi_rssi_y;
-    int16_t wifi_daemon_y;
+    int16_t wifi_claude_y;
+    int16_t wifi_codex_y;
     int16_t wifi_age_y;
     const lv_font_t* wifi_status_font;
     const lv_font_t* wifi_row_font;  // also used for sub-lines
@@ -89,8 +89,8 @@ static void compute_layout(const BoardCaps& c) {
         L.wifi_status_y = 2;
         L.wifi_ssid_y = 68;
         L.wifi_ip_y = 106;
-        L.wifi_rssi_y = 144;
-        L.wifi_daemon_y = 182;
+        L.wifi_claude_y = 144;
+        L.wifi_codex_y = 182;
         L.wifi_age_y = 220;
         L.wifi_status_font   = &font_styrene_48;
         L.wifi_row_font   = &font_styrene_28;
@@ -101,7 +101,7 @@ static void compute_layout(const BoardCaps& c) {
         // ~7% shorter than the square, so heights/fonts stay close to the
         // large layout; the title shrinks only because "WiFi" at 56px would
         // overrun the narrower (368px) width. Panel holds the status row +
-        // five diagnostic rows (SSID, IP, signal, daemon, age) + credits.
+        // five diagnostic rows (SSID, IP, Claude, Codex, age) + credits.
         L.title_font       = &font_tiempos_34;
         L.usage_panel_h = 134;
         L.usage_bar_y = 48;
@@ -116,8 +116,8 @@ static void compute_layout(const BoardCaps& c) {
         L.wifi_status_y = 4;
         L.wifi_ssid_y = 56;
         L.wifi_ip_y = 92;
-        L.wifi_rssi_y = 128;
-        L.wifi_daemon_y = 164;
+        L.wifi_claude_y = 128;
+        L.wifi_codex_y = 164;
         L.wifi_age_y = 200;
         L.wifi_status_font   = &font_styrene_28;
         L.wifi_row_font   = &font_styrene_20;   // sub-lines; 24px overflowed the 296px inner width
@@ -167,8 +167,8 @@ static lv_obj_t* wifi_container;
 static lv_obj_t* lbl_wifi_status;
 static lv_obj_t* lbl_wifi_ssid;
 static lv_obj_t* lbl_wifi_ip;
-static lv_obj_t* lbl_wifi_rssi;
-static lv_obj_t* lbl_wifi_daemon;
+static lv_obj_t* lbl_wifi_claude;
+static lv_obj_t* lbl_wifi_codex;
 static lv_obj_t* lbl_wifi_age;
 
 // ---- Battery indicator (shared, on top) ----
@@ -454,17 +454,17 @@ static void init_wifi_screen(lv_obj_t* scr) {
     lv_obj_set_style_text_color(lbl_wifi_ip, COL_DIM, 0);
     lv_obj_set_pos(lbl_wifi_ip, 0, L.wifi_ip_y);
 
-    lbl_wifi_rssi = lv_label_create(p_info);
-    lv_label_set_text(lbl_wifi_rssi, "Signal: ---");
-    lv_obj_set_style_text_font(lbl_wifi_rssi, L.wifi_row_font, 0);
-    lv_obj_set_style_text_color(lbl_wifi_rssi, COL_DIM, 0);
-    lv_obj_set_pos(lbl_wifi_rssi, 0, L.wifi_rssi_y);
+    lbl_wifi_claude = lv_label_create(p_info);
+    lv_label_set_text(lbl_wifi_claude, "Claude: ---");
+    lv_obj_set_style_text_font(lbl_wifi_claude, L.wifi_row_font, 0);
+    lv_obj_set_style_text_color(lbl_wifi_claude, COL_DIM, 0);
+    lv_obj_set_pos(lbl_wifi_claude, 0, L.wifi_claude_y);
 
-    lbl_wifi_daemon = lv_label_create(p_info);
-    lv_label_set_text(lbl_wifi_daemon, "Daemon: ---");
-    lv_obj_set_style_text_font(lbl_wifi_daemon, L.wifi_row_font, 0);
-    lv_obj_set_style_text_color(lbl_wifi_daemon, COL_DIM, 0);
-    lv_obj_set_pos(lbl_wifi_daemon, 0, L.wifi_daemon_y);
+    lbl_wifi_codex = lv_label_create(p_info);
+    lv_label_set_text(lbl_wifi_codex, "Codex: ---");
+    lv_obj_set_style_text_font(lbl_wifi_codex, L.wifi_row_font, 0);
+    lv_obj_set_style_text_color(lbl_wifi_codex, COL_DIM, 0);
+    lv_obj_set_pos(lbl_wifi_codex, 0, L.wifi_codex_y);
 
     lbl_wifi_age = lv_label_create(p_info);
     lv_label_set_text(lbl_wifi_age, "Updated: \xe2\x80\x94");
@@ -676,8 +676,32 @@ screen_t ui_get_current_screen(void) {
     return current_screen;
 }
 
+// Render one provider's WiFi-page row ("<name>: <state>") + color. Each provider
+// gets its own row (net_provider_health per provider), so a problem on one never
+// blanks the other. Post-cutover the device fetches usage DIRECTLY from the
+// providers; the broker (daemon) is hit only to (re)fetch tokens, so the row
+// tracks that provider's data freshness + token/auth state, not a daemon link.
+// "no data" = tokens in hand but no good fetch yet (vs "stale" = aged out). ASCII
+// "..." not U+2026 — the 20px row font has no ellipsis glyph.
+static void set_wifi_provider_row(lv_obj_t* lbl, const char* name, usage_health_t h) {
+    const char* body = "---";
+    lv_color_t  col  = COL_DIM;
+    switch (h) {
+    case USAGE_OFFLINE:      body = "---";               col = COL_DIM;   break;
+    case USAGE_NEEDS_ACTION: body = "needs login";       col = COL_RED;   break;
+    case USAGE_BROKER_DOWN:  body = "broker down";       col = COL_RED;   break;
+    case USAGE_NO_TOKEN:     body = "getting tokens..."; col = COL_AMBER; break;
+    case USAGE_NO_DATA:      body = "no data";           col = COL_RED;   break;
+    case USAGE_LIVE:         body = "live";              col = COL_GREEN; break;
+    case USAGE_STALE:        body = "stale";             col = COL_AMBER; break;
+    }
+    lv_label_set_text_fmt(lbl, "%s: %s", name, body);
+    lv_obj_set_style_text_color(lbl, col, 0);
+}
+
 void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip,
-                           int rssi, uint32_t last_update_ms, daemon_health_t daemon_health) {
+                           uint32_t last_update_ms, usage_health_t claude_health,
+                           usage_health_t codex_health) {
     // Status label + color
     switch (state) {
     case NET_ONLINE:
@@ -698,47 +722,8 @@ void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip,
     lv_label_set_text_fmt(lbl_wifi_ssid, "SSID: %s", (ssid && *ssid) ? ssid : "---");
     lv_label_set_text_fmt(lbl_wifi_ip,   "IP: %s",   (ip && *ip) ? ip : "---");
 
-    if (state == NET_ONLINE)
-        lv_label_set_text_fmt(lbl_wifi_rssi, "Signal: %d dBm", rssi);
-    else
-        lv_label_set_text(lbl_wifi_rssi, "Signal: ---");
-
-    // Daemon reachability — a derived verdict (net_daemon_health) that the caller
-    // re-evaluates over time and only repaints on a transition. Distinguishes
-    // "WiFi up but daemon unreachable" (daemon down, wrong host, mDNS not
-    // resolving) from a healthy link. "no data" (not "no response") for the
-    // never-fetched case: a reachable daemon returns 503 before its first
-    // upstream poll, indistinguishable from unreachable by age alone.
-    switch (daemon_health) {
-    case DAEMON_OFFLINE:
-        lv_label_set_text(lbl_wifi_daemon, "Daemon: ---");
-        lv_obj_set_style_text_color(lbl_wifi_daemon, COL_DIM, 0);
-        break;
-    case DAEMON_NEEDS_ACTION:
-        lv_label_set_text(lbl_wifi_daemon, "Daemon: needs login");
-        lv_obj_set_style_text_color(lbl_wifi_daemon, COL_RED, 0);
-        break;
-    case DAEMON_BROKER_DOWN:
-        lv_label_set_text(lbl_wifi_daemon, "Daemon: broker down");
-        lv_obj_set_style_text_color(lbl_wifi_daemon, COL_RED, 0);
-        break;
-    case DAEMON_NO_TOKEN:
-        lv_label_set_text(lbl_wifi_daemon, "Daemon: getting tokens\xe2\x80\xa6");
-        lv_obj_set_style_text_color(lbl_wifi_daemon, COL_AMBER, 0);
-        break;
-    case DAEMON_NO_DATA:
-        lv_label_set_text(lbl_wifi_daemon, "Daemon: no data");
-        lv_obj_set_style_text_color(lbl_wifi_daemon, COL_RED, 0);
-        break;
-    case DAEMON_CONNECTED:
-        lv_label_set_text(lbl_wifi_daemon, "Daemon: connected");
-        lv_obj_set_style_text_color(lbl_wifi_daemon, COL_GREEN, 0);
-        break;
-    case DAEMON_STALE:
-        lv_label_set_text(lbl_wifi_daemon, "Daemon: stale");
-        lv_obj_set_style_text_color(lbl_wifi_daemon, COL_AMBER, 0);
-        break;
-    }
+    set_wifi_provider_row(lbl_wifi_claude, "Claude", claude_health);
+    set_wifi_provider_row(lbl_wifi_codex,  "Codex",  codex_health);
 
     // Last-update wall-clock time. The device has no RTC: NTP sets the clock a
     // few seconds after WiFi associates. Rather than storing the epoch at fetch

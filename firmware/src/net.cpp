@@ -48,12 +48,13 @@ static bool s_has_data = false;
 static char s_ssid_buf[64];
 static char s_ip_buf[20];
 
-// millis() of last successful provider fetch (any provider); 0 = never.
-static uint32_t s_last_update_ms = 0;
+// millis() of each provider's last successful fetch; 0 = never. Per-provider so
+// the WiFi page can show each provider's own live/stale freshness independently.
+static uint32_t s_last_update_ms[PROVIDER_COUNT] = {0};
 
 // Staleness window for the health verdict: ~2.75× the fetch interval, derived
 // from FETCH_INTERVAL_MS so it can't drift when the interval changes.
-#define DAEMON_STALE_MS ((uint32_t)FETCH_INTERVAL_MS * 11UL / 4UL)
+#define USAGE_STALE_MS ((uint32_t)FETCH_INTERVAL_MS * 11UL / 4UL)
 
 // Per-provider last-good slot. -1 = no data yet (UI shows "Connecting…").
 struct Slot {
@@ -220,7 +221,7 @@ static void fetch_tokens(void) {
         Serial.printf("[net] broker bad body: %s\n", err.c_str());
         return;
     }
-    // Parseable reply = broker is reachable (clears DAEMON_BROKER_DOWN).
+    // Parseable reply = broker is reachable (clears USAGE_BROKER_DOWN).
     s_broker_reachable = true;
     apply_token(PROV_CLAUDE, doc["claude"], s_claude_token, sizeof(s_claude_token), nullptr, 0);
     apply_token(PROV_CODEX,  doc["codex"],  s_codex_token,  sizeof(s_codex_token),
@@ -290,7 +291,7 @@ static void fetch_claude(void) {
         bool limited = (st.length() && st != "allowed") || s_claude.s >= 100;
         strlcpy(s_claude.st, limited ? "limited" : "allowed", sizeof(s_claude.st));
         s_claude.ok = true;
-        s_last_update_ms = millis();
+        s_last_update_ms[PROV_CLAUDE] = millis();
         Serial.printf("[net] claude 200: s=%d w=%d\n", s_claude.s, s_claude.w);
     } else {
         // 200-without-headers is a failure: keep last-good values, flag ok=false
@@ -344,7 +345,7 @@ static void fetch_codex(void) {
             bool limited = !allowed || reached || s_codex.s >= 100;
             strlcpy(s_codex.st, limited ? "limited" : "allowed", sizeof(s_codex.st));
             s_codex.ok = true;
-            s_last_update_ms = millis();
+            s_last_update_ms[PROV_CODEX] = millis();
             Serial.printf("[net] codex 200: cs=%d cw=%d\n", s_codex.s, s_codex.w);
         }
     } else {
@@ -361,7 +362,8 @@ static void fetch_codex(void) {
 void net_init(void) {
     s_state           = NET_CONNECTING;
     s_has_data        = false;
-    s_last_update_ms  = 0;
+    s_last_update_ms[PROV_CLAUDE] = 0;
+    s_last_update_ms[PROV_CODEX]  = 0;
     s_force_claude    = false;
     s_force_codex     = false;
     s_claude_last_fetch = 0;
@@ -503,20 +505,26 @@ void net_request_refresh(void) {
 const char* net_get_ssid(void) { return s_ssid_buf; }
 const char* net_get_ip(void)   { return s_ip_buf; }
 int         net_get_rssi(void) { return WiFi.RSSI(); }
-uint32_t    net_last_update_ms(void) { return s_last_update_ms; }
+uint32_t net_last_update_ms(void) {
+    // Most-recent fetch across providers — drives the WiFi page's "Updated" line.
+    uint32_t m = 0;
+    for (int i = 0; i < PROVIDER_COUNT; i++)
+        if (s_last_update_ms[i] > m) m = s_last_update_ms[i];
+    return m;
+}
 
-daemon_health_t net_daemon_health(void) {
-    // Aggregate verdict across both providers. Auth/token problems outrank the
-    // data-freshness states: they're actionable and explain missing data. The
-    // per-provider ok/cok flags still carry each provider's own state to its
-    // panel, so a one-provider problem doesn't blank the healthy one's numbers.
-    if (s_state != NET_ONLINE) return DAEMON_OFFLINE;
-    if (s_tok[PROV_CLAUDE] == TOK_NEEDS_ACTION || s_tok[PROV_CODEX] == TOK_NEEDS_ACTION)
-        return DAEMON_NEEDS_ACTION;
-    bool need = s_need_fetch[PROV_CLAUDE] || s_need_fetch[PROV_CODEX];
-    if (need && s_broker_attempted && !s_broker_reachable) return DAEMON_BROKER_DOWN;
-    if (need) return DAEMON_NO_TOKEN;
-    if (s_last_update_ms == 0)  return DAEMON_NO_DATA;
-    if (millis() - s_last_update_ms <= DAEMON_STALE_MS) return DAEMON_CONNECTED;
-    return DAEMON_STALE;
+usage_health_t net_provider_health(int prov) {
+    // One provider's verdict, in priority order. Auth/token problems outrank the
+    // data-freshness states: they're actionable and explain missing data. Each
+    // provider is independent — one needing re-auth never affects the other's row.
+    if (prov < 0 || prov >= PROVIDER_COUNT) return USAGE_OFFLINE;  // guard the array indexing
+    if (s_state != NET_ONLINE) return USAGE_OFFLINE;
+    if (s_tok[prov] == TOK_NEEDS_ACTION) return USAGE_NEEDS_ACTION;
+    if (s_need_fetch[prov]) {
+        if (s_broker_attempted && !s_broker_reachable) return USAGE_BROKER_DOWN;
+        return USAGE_NO_TOKEN;
+    }
+    if (s_last_update_ms[prov] == 0)  return USAGE_NO_DATA;
+    if (millis() - s_last_update_ms[prov] <= USAGE_STALE_MS) return USAGE_LIVE;
+    return USAGE_STALE;
 }
