@@ -27,7 +27,9 @@ Dynamic hiding requires four distinct pieces of machinery that interact:
 
 Each of these is individually simple, but together they form a web of edge cases: what if both providers are absent (only WiFi in the forward cycle, both provider screens show "No account")? What if the user is on the Codex screen and removes their account mid-cycle? What if `prev_non_splash_screen` points at a now-disabled screen on a click-to-toggle-splash action?
 
-The static approach deletes all four: the cycle is unconditional, the only firmware change is a flat branch in `ui_update_provider`. The `sp`/`cp` presence flags are still emitted by the daemon and parsed by the firmware — they select the "No account" message text, nothing else.
+The static approach deletes all four: the cycle is unconditional, the only firmware change is a flat branch in `ui_update_provider`, keyed on `ProviderUsage.present`. The decision still holds — it kept the absent-provider path a single dead-simple branch instead of four interacting state machines.
+
+> **Post-cutover note:** `present` was originally a daemon-emitted `sp`/`cp` wire flag that selected the "No account" text. After the token-broker cutover the device fetches each provider directly with no wire-JSON layer, and `present` is now **always `true`** — a provider needing re-auth surfaces via the WiFi-page health verdict, not a blanked panel. The `present=false` branch is therefore latent, kept for the absent-provider case the static design still supports.
 
 ## Alternatives considered
 

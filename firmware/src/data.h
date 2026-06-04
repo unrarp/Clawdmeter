@@ -2,8 +2,10 @@
 #include <Arduino.h>
 
 // Per-provider usage window. session_pct/weekly_pct == -1 means "no data yet"
-// (device shows "Connecting…"); present==false means the provider is absent
-// (device shows the "No <provider> account" placeholder).
+// (device shows "Connecting…"). present is always true post-cutover: the device
+// fetches each provider directly, so a provider needing re-auth surfaces via the
+// WiFi-page health verdict, not a blanked panel. The present==false "No <provider>
+// account" path is retained but latent (see .claude/rules/ui.md).
 struct ProviderUsage {
     float session_pct;        // 5-hour window utilization (0-100), -1 = no data
     int   session_reset_mins; // minutes until session resets
@@ -11,7 +13,7 @@ struct ProviderUsage {
     int   weekly_reset_mins;  // minutes until weekly resets
     char  status[16];         // "allowed" / "limited" (parsed; not currently rendered)
     bool  ok;                 // last poll for this provider succeeded
-    bool  present;            // provider is configured on the daemon side
+    bool  present;            // always true post-cutover; false path latent
 };
 
 // Provider order is the UI/fetch order, and the index into every per-provider

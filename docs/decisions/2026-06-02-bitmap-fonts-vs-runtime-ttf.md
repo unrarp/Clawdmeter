@@ -7,7 +7,7 @@ tags: [fonts, lvgl, lv_font_conv, bitmap-font, freetype, tiny_ttf, flash, psram,
 # Pre-baked bitmap fonts vs runtime TTF rasterization
 
 ## Context
-The UI ships 12 generated `font_*.c` files (Styrene ×8, Tiempos ×2, Mono ×2), ~1.35 MB of source. Fixing the cramped compact layout needed a new headline size, which meant *generating* `font_styrene_36.c` rather than scaling an existing font — raising the question of why each size needs its own file and whether the device could render `.otf`/`.ttf` directly.
+The UI ships 9 generated `font_*.c` files (Styrene ×6, Tiempos ×2, Mono ×1), ~1.2 MB of source. Fixing the cramped compact layout needed a new headline size, which meant *generating* `font_styrene_36.c` rather than scaling an existing font — raising the question of why each size needs its own file and whether the device could render `.otf`/`.ttf` directly.
 
 ## Decision / Solution
 Keep pre-baked, per-size LVGL bitmap fonts (`lv_font_conv --format lvgl --bpp 4 --no-compress`, one `.c` per typeface+size; declared via `LV_FONT_DECLARE` in `firmware/src/fonts.h`, the single inventory included by `ui.cpp` + `splash.cpp`). Do not enable a runtime rasterizer.

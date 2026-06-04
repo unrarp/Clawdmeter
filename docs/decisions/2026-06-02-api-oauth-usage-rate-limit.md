@@ -4,12 +4,16 @@ module: daemon
 tags: [rate-limit, oauth, api-oauth-usage, poll-interval, backoff]
 ---
 
-> **Addendum (2026-06-04):** The 300s constraint below is **moot for the
-> device's current path**. The device no longer calls `/api/oauth/usage`; it
+> **Addendum (2026-06-04):** This is now a **historical / rejected-alternative
+> record** — nothing in the repo hits `/api/oauth/usage` anymore. The polling
+> daemon `daemon/claude_usage_daemon.py` described below was **deleted at the
+> token-broker cutover** (`284c496`); the device fetches usage directly and
 > scrapes the `anthropic-ratelimit-unified-*` response headers off a
 > `POST /v1/messages` (max_tokens:1) call, which has generous limits and no
-> known rate-limit problems. The 300s rule still applies to anything that
-> DOES hit `/api/oauth/usage` directly (e.g. a host-side daemon).
+> known rate-limit problems. Kept because the empirical rate-limit evidence
+> below is what ruled `/api/oauth/usage` out — re-read it before anyone
+> reintroduces that endpoint. The sections below describe the deleted daemon in
+> the present tense as it stood at the time.
 
 # `/api/oauth/usage` requires a ≥300s poll interval and a fail-backoff
 

@@ -25,7 +25,8 @@ one that cycles screens), not the refresh button.
   on — **no firmware config needed** (confirmed empirically on battery: hold off,
   press on).
 - Firmware adds `power_hal_shutdown()` → `pmu.shutdown()` (`hal/power_hal.h`, all
-  board ports) for the 5-min battery auto-off in `idle.cpp`.
+  board ports) for the battery inactivity auto-off in `idle.cpp` (`IDLE_DIM_MS` =
+  6 min dim → `IDLE_TIMEOUT_MS` = 12 min power-off; see `idle_cfg.h`).
 - The 1.8's `power_hal_pwr_pressed()` fires on a **short release** (held < 1 s),
   not the press edge, so a long power-off hold doesn't also cycle a page on the
   way down (`boards/waveshare_amoled_18/power.cpp`).

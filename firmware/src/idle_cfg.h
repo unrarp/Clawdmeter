@@ -2,10 +2,10 @@
 
 // Inactivity dim + auto power-off (battery only). "Activity" is a physical
 // touch/button OR a real change in the usage numbers — so the device stays lit
-// while your usage is moving. Those numbers only refresh as fast as the daemon
-// polls upstream (~5 min), so these thresholds are sized against that 5-min data
-// cadence, NOT the 60 s device fetch interval: dim just past one data cycle (so
-// live data keeps the panel bright), power off at roughly two.
+// while your usage is moving. The device fetches usage directly every ~60 s
+// (FETCH_INTERVAL_MS), so a usage change can re-arm the timer up to once a
+// minute; the dim/off windows below are plain idle windows (dim well before
+// off), not tied to any data cadence.
 
 #define IDLE_DIM_MS                 (6UL  * 60UL * 1000UL)  // 6 min idle  -> dim panel
 #define IDLE_TIMEOUT_MS             (12UL * 60UL * 1000UL)  // 12 min idle -> power off
