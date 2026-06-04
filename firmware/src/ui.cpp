@@ -44,8 +44,7 @@ struct Layout {
     int16_t wifi_status_y;     // shared y for the status icon and the status label
     int16_t wifi_ssid_y;
     int16_t wifi_ip_y;
-    int16_t wifi_claude_y;
-    int16_t wifi_codex_y;
+    int16_t wifi_prov_y[PROVIDER_COUNT];  // one diagnostic row per provider
     int16_t wifi_age_y;
     const lv_font_t* wifi_status_font;
     const lv_font_t* wifi_row_font;  // also used for sub-lines
@@ -59,6 +58,14 @@ static Layout L = {};
 // inherit the closer one — visually OK, may need a polish pass for
 // pixel-perfect alignment but never blocks the port from booting.
 static void compute_layout(const BoardCaps& c) {
+    // The WiFi-page row Ys below are per-board hand-tuned constants, set by index
+    // for each provider — the one spot the provider-table refactor can't loop
+    // (there's no generic formula for the breakpoint layout). Adding a provider
+    // means adding a wifi_prov_y[N] in BOTH branches; this assert makes forgetting
+    // a compile error instead of a silent render at y=0.
+    static_assert(PROVIDER_COUNT == 2,
+                  "compute_layout defines wifi_prov_y[] per provider — add a Y in "
+                  "both board branches for each new provider, then bump this assert");
     L.scr_w = c.width;
     L.scr_h = c.height;
     L.margin = 20;
@@ -89,8 +96,8 @@ static void compute_layout(const BoardCaps& c) {
         L.wifi_status_y = 2;
         L.wifi_ssid_y = 68;
         L.wifi_ip_y = 106;
-        L.wifi_claude_y = 144;
-        L.wifi_codex_y = 182;
+        L.wifi_prov_y[0] = 144;
+        L.wifi_prov_y[1] = 182;
         L.wifi_age_y = 220;
         L.wifi_status_font   = &font_styrene_48;
         L.wifi_row_font   = &font_styrene_28;
@@ -116,8 +123,8 @@ static void compute_layout(const BoardCaps& c) {
         L.wifi_status_y = 4;
         L.wifi_ssid_y = 56;
         L.wifi_ip_y = 92;
-        L.wifi_claude_y = 128;
-        L.wifi_codex_y = 164;
+        L.wifi_prov_y[0] = 128;
+        L.wifi_prov_y[1] = 164;
         L.wifi_age_y = 200;
         L.wifi_status_font   = &font_styrene_28;
         L.wifi_row_font   = &font_styrene_20;   // sub-lines; 24px overflowed the 296px inner width
@@ -158,17 +165,15 @@ struct ProviderWidgets {
     lv_obj_t* anim;
 };
 
-// ---- Usage screen widgets ----
-static ProviderWidgets claude_w;
-static ProviderWidgets codex_w;
+// ---- Provider screen widgets (one bundle per provider, indexed by PROV_*) ----
+static ProviderWidgets screens[PROVIDER_COUNT];
 
 // ---- WiFi screen widgets ----
 static lv_obj_t* wifi_container;
 static lv_obj_t* lbl_wifi_status;
 static lv_obj_t* lbl_wifi_ssid;
 static lv_obj_t* lbl_wifi_ip;
-static lv_obj_t* lbl_wifi_claude;
-static lv_obj_t* lbl_wifi_codex;
+static lv_obj_t* lbl_wifi_prov[PROVIDER_COUNT];  // one freshness row per provider
 static lv_obj_t* lbl_wifi_age;
 
 // ---- Battery indicator (shared, on top) ----
@@ -177,9 +182,8 @@ static lv_obj_t* logo_img;
 static lv_image_dsc_t battery_dscs[5];  // empty, low, medium, full, charging
 
 // ---- Shared ----
-static lv_image_dsc_t logo_claude_dsc;
-static lv_image_dsc_t logo_openai_dsc;
-static screen_t current_screen = SCREEN_USAGE;
+static lv_image_dsc_t logo_dscs[PROVIDER_COUNT];  // one mark per provider, built in ui_init
+static screen_t current_screen = SCREEN_PROVIDER_BASE;
 
 // Animation state
 static uint32_t anim_last_ms = 0;
@@ -239,6 +243,33 @@ static const char* const anim_messages[] = {
 // (default) / "Thinking" (reasoning). Mirror that on the Codex screen.
 static const char* const codex_messages[] = { "Working", "Thinking" };
 #define CODEX_MSG_COUNT (sizeof(codex_messages) / sizeof(codex_messages[0]))
+
+// Per-provider UI descriptor, indexed by PROV_* (data.h). The one place a new
+// provider's branding lives: title/row name, logo bitmap, accent, "no account"
+// caption, and the spinner-message catalog. Add a row here + a data.h enum entry
+// and the screens, logos, wifi rows, and animation all follow automatically.
+struct UiProvider {
+    const char* name;                  // screen title + WiFi-page row label
+    const uint8_t* logo_data;          // RGB565A8 mark (see logos.h)
+    int16_t logo_w, logo_h;
+    lv_color_t accent;                 // spinner color
+    const char* absent_msg;            // placeholder when present == false
+    const char* const* anim_msgs;      // spinner-message catalog
+    size_t anim_count;
+};
+static const UiProvider UI_PROVIDERS[PROVIDER_COUNT] = {
+    { "Claude", logo_claude_data, LOGO_CLAUDE_WIDTH, LOGO_CLAUDE_HEIGHT,
+      COL_ACCENT, "No Claude account", anim_messages, ANIM_MSG_COUNT },
+    { "Codex", logo_openai_data, LOGO_OPENAI_WIDTH, LOGO_OPENAI_HEIGHT,
+      COL_ACCENT_CODEX, "No OpenAI account", codex_messages, CODEX_MSG_COUNT },
+};
+
+// Splash, then a contiguous range of provider screens, then WiFi (see ui.h).
+static inline bool is_provider_screen(screen_t s) {
+    return s >= SCREEN_PROVIDER_BASE && s < (screen_t)(SCREEN_PROVIDER_BASE + PROVIDER_COUNT);
+}
+static inline int      provider_of(screen_t s)      { return (int)s - SCREEN_PROVIDER_BASE; }
+static inline screen_t screen_for_provider(int i)   { return (screen_t)(SCREEN_PROVIDER_BASE + i); }
 
 static lv_color_t pct_color(float pct) {
     if (pct >= 80.0f) return COL_RED;
@@ -454,17 +485,13 @@ static void init_wifi_screen(lv_obj_t* scr) {
     lv_obj_set_style_text_color(lbl_wifi_ip, COL_DIM, 0);
     lv_obj_set_pos(lbl_wifi_ip, 0, L.wifi_ip_y);
 
-    lbl_wifi_claude = lv_label_create(p_info);
-    lv_label_set_text(lbl_wifi_claude, "Claude: ---");
-    lv_obj_set_style_text_font(lbl_wifi_claude, L.wifi_row_font, 0);
-    lv_obj_set_style_text_color(lbl_wifi_claude, COL_DIM, 0);
-    lv_obj_set_pos(lbl_wifi_claude, 0, L.wifi_claude_y);
-
-    lbl_wifi_codex = lv_label_create(p_info);
-    lv_label_set_text(lbl_wifi_codex, "Codex: ---");
-    lv_obj_set_style_text_font(lbl_wifi_codex, L.wifi_row_font, 0);
-    lv_obj_set_style_text_color(lbl_wifi_codex, COL_DIM, 0);
-    lv_obj_set_pos(lbl_wifi_codex, 0, L.wifi_codex_y);
+    for (int i = 0; i < PROVIDER_COUNT; i++) {
+        lbl_wifi_prov[i] = lv_label_create(p_info);
+        lv_label_set_text_fmt(lbl_wifi_prov[i], "%s: ---", UI_PROVIDERS[i].name);
+        lv_obj_set_style_text_font(lbl_wifi_prov[i], L.wifi_row_font, 0);
+        lv_obj_set_style_text_color(lbl_wifi_prov[i], COL_DIM, 0);
+        lv_obj_set_pos(lbl_wifi_prov[i], 0, L.wifi_prov_y[i]);
+    }
 
     lbl_wifi_age = lv_label_create(p_info);
     lv_label_set_text(lbl_wifi_age, "Updated: \xe2\x80\x94");
@@ -496,13 +523,15 @@ void ui_init(void) {
     lv_obj_set_style_bg_color(scr, COL_BG, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
-    init_icon_dsc(&logo_claude_dsc, LOGO_CLAUDE_WIDTH, LOGO_CLAUDE_HEIGHT, logo_claude_data, LV_COLOR_FORMAT_RGB565A8);
-    init_icon_dsc(&logo_openai_dsc, LOGO_OPENAI_WIDTH, LOGO_OPENAI_HEIGHT, logo_openai_data, LV_COLOR_FORMAT_RGB565A8);
+    for (int i = 0; i < PROVIDER_COUNT; i++)
+        init_icon_dsc(&logo_dscs[i], UI_PROVIDERS[i].logo_w, UI_PROVIDERS[i].logo_h,
+                      UI_PROVIDERS[i].logo_data, LV_COLOR_FORMAT_RGB565A8);
     init_battery_icons();
 
-    init_provider_screen(scr, "Claude", COL_ACCENT, &claude_w);
-    init_provider_screen(scr, "Codex", COL_ACCENT_CODEX, &codex_w);
-    lv_obj_add_flag(codex_w.container, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < PROVIDER_COUNT; i++) {
+        init_provider_screen(scr, UI_PROVIDERS[i].name, UI_PROVIDERS[i].accent, &screens[i]);
+        lv_obj_add_flag(screens[i].container, LV_OBJ_FLAG_HIDDEN);  // ui_show_screen reveals one
+    }
     init_wifi_screen(scr);
     splash_init(scr);
 
@@ -511,7 +540,7 @@ void ui_init(void) {
     }
 
     logo_img = lv_image_create(scr);
-    lv_image_set_src(logo_img, &logo_claude_dsc);
+    lv_image_set_src(logo_img, &logo_dscs[0]);
     lv_obj_set_pos(logo_img, L.margin, L.logo_y);
 
     battery_img = lv_image_create(scr);
@@ -578,21 +607,21 @@ static void ui_update_provider(ProviderWidgets* w,
 
 void ui_update(const UsageData* data) {
     if (!data->valid) return;
-    static ProviderWidgets* const PROVIDER_WIDGETS[PROVIDER_COUNT] = { &claude_w, &codex_w };
-    static const char* const ABSENT_MSG[PROVIDER_COUNT] = { "No Claude account", "No OpenAI account" };
     for (int i = 0; i < PROVIDER_COUNT; i++) {
         const ProviderUsage& p = data->providers[i];
-        ui_update_provider(PROVIDER_WIDGETS[i], p.session_pct, p.session_reset_mins,
-                           p.weekly_pct, p.weekly_reset_mins, p.present, p.ok, ABSENT_MSG[i]);
+        ui_update_provider(&screens[i], p.session_pct, p.session_reset_mins,
+                           p.weekly_pct, p.weekly_reset_mins, p.present, p.ok,
+                           UI_PROVIDERS[i].absent_msg);
     }
 }
 
 void ui_tick_anim(void) {
-    if (current_screen != SCREEN_USAGE && current_screen != SCREEN_CODEX) return;
+    if (!is_provider_screen(current_screen)) return;
+    int prov = provider_of(current_screen);
 
     uint32_t now = lv_tick_get();
-    const char* const* msgs = (current_screen == SCREEN_CODEX) ? codex_messages : anim_messages;
-    size_t msg_count = (current_screen == SCREEN_CODEX) ? CODEX_MSG_COUNT : ANIM_MSG_COUNT;
+    const char* const* msgs = UI_PROVIDERS[prov].anim_msgs;
+    size_t msg_count = UI_PROVIDERS[prov].anim_count;
 
     if (now - anim_msg_start >= ANIM_MSG_MS) {
         anim_msg_idx = (anim_msg_idx + 1) % msg_count;
@@ -609,12 +638,11 @@ void ui_tick_anim(void) {
         snprintf(buf, sizeof(buf), "%s %s\xE2\x80\xA6",
                  spinner_frames[anim_spinner_idx],
                  msgs[anim_msg_idx % msg_count]);
-        lv_obj_t* anim_lbl = (current_screen == SCREEN_CODEX) ? codex_w.anim : claude_w.anim;
-        lv_label_set_text(anim_lbl, buf);
+        lv_label_set_text(screens[prov].anim, buf);
     }
 }
 
-static screen_t prev_non_splash_screen = SCREEN_USAGE;
+static screen_t prev_non_splash_screen = SCREEN_PROVIDER_BASE;
 static void apply_battery_visibility(void) {
     if (!battery_img) return;
     if (current_screen == SCREEN_SPLASH) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
@@ -628,26 +656,24 @@ static void global_click_cb(lv_event_t* e) {
 }
 
 void ui_show_screen(screen_t screen) {
-    lv_obj_add_flag(claude_w.container, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(codex_w.container, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < PROVIDER_COUNT; i++)
+        lv_obj_add_flag(screens[i].container, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(wifi_container, LV_OBJ_FLAG_HIDDEN);
     splash_hide();
 
-    switch (screen) {
-    case SCREEN_SPLASH:  splash_show(); break;
-    case SCREEN_USAGE:   lv_obj_clear_flag(claude_w.container, LV_OBJ_FLAG_HIDDEN); break;
-    case SCREEN_CODEX:   lv_obj_clear_flag(codex_w.container, LV_OBJ_FLAG_HIDDEN); break;
-    case SCREEN_WIFI:    lv_obj_clear_flag(wifi_container, LV_OBJ_FLAG_HIDDEN); break;
-    default: break;
-    }
+    if (screen == SCREEN_SPLASH)            splash_show();
+    else if (screen == SCREEN_WIFI)         lv_obj_clear_flag(wifi_container, LV_OBJ_FLAG_HIDDEN);
+    else if (is_provider_screen(screen))    lv_obj_clear_flag(screens[provider_of(screen)].container, LV_OBJ_FLAG_HIDDEN);
 
     if (logo_img) {
         if (screen == SCREEN_SPLASH) {
             lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
-            if (screen == SCREEN_CODEX) lv_image_set_src(logo_img, &logo_openai_dsc);
-            else                        lv_image_set_src(logo_img, &logo_claude_dsc);
+            // Provider screens show their own mark; non-provider pages (WiFi)
+            // keep the first provider's mark, as before.
+            int li = is_provider_screen(screen) ? provider_of(screen) : 0;
+            lv_image_set_src(logo_img, &logo_dscs[li]);
         }
     }
 
@@ -657,12 +683,14 @@ void ui_show_screen(screen_t screen) {
 }
 
 void ui_cycle_screen(void) {
+    // Cycle provider0 → … → providerN-1 → WiFi → provider0 (Splash is outside
+    // the cycle; the PWR button toggles it separately).
     screen_t next;
-    switch (current_screen) {
-    case SCREEN_USAGE:  next = SCREEN_CODEX;  break;
-    case SCREEN_CODEX:  next = SCREEN_WIFI;   break;
-    case SCREEN_WIFI:   next = SCREEN_USAGE;  break;
-    default:            next = SCREEN_USAGE;  break;
+    if (is_provider_screen(current_screen)) {
+        int p = provider_of(current_screen);
+        next = (p + 1 < PROVIDER_COUNT) ? screen_for_provider(p + 1) : SCREEN_WIFI;
+    } else {  // WiFi or anything else → back to the first provider
+        next = screen_for_provider(0);
     }
     ui_show_screen(next);
 }
@@ -700,8 +728,7 @@ static void set_wifi_provider_row(lv_obj_t* lbl, const char* name, usage_health_
 }
 
 void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip,
-                           uint32_t last_update_ms, usage_health_t claude_health,
-                           usage_health_t codex_health) {
+                           uint32_t last_update_ms, const usage_health_t* health) {
     // Status label + color
     switch (state) {
     case NET_ONLINE:
@@ -722,8 +749,8 @@ void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip,
     lv_label_set_text_fmt(lbl_wifi_ssid, "SSID: %s", (ssid && *ssid) ? ssid : "---");
     lv_label_set_text_fmt(lbl_wifi_ip,   "IP: %s",   (ip && *ip) ? ip : "---");
 
-    set_wifi_provider_row(lbl_wifi_claude, "Claude", claude_health);
-    set_wifi_provider_row(lbl_wifi_codex,  "Codex",  codex_health);
+    for (int i = 0; i < PROVIDER_COUNT; i++)
+        set_wifi_provider_row(lbl_wifi_prov[i], UI_PROVIDERS[i].name, health[i]);
 
     // Last-update wall-clock time. The device has no RTC: NTP sets the clock a
     // few seconds after WiFi associates. Rather than storing the epoch at fetch

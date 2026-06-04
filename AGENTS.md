@@ -13,7 +13,7 @@ Two reference ports today:
 
 The shared code calls a small HAL (`firmware/src/hal/`) that each board implements: display, touch, input, power, IMU. Optional features are guarded by `BoardCaps` (runtime) and `BOARD_HAS_*` (compile-time) rather than `#ifdef BOARD_*`.
 
-The device fetches usage **directly from both provider APIs over TLS** (~60 s interval) and synthesizes the 14-key wire JSON on-device (`firmware/src/net.cpp`); the host runs a small **token broker** (`daemon/token_broker.py`) the device queries only to (re)fetch credentials — on first boot (empty NVS) and on a provider 401/403. This file is for future Claude Code sessions to bootstrap quickly. Read this first.
+The device fetches usage **directly from both provider APIs over TLS** (~60 s interval) and writes each provider's mapped result straight into a `ProviderUsage` for the UI (`firmware/src/net.cpp`, provider-table driven — no wire-JSON layer); the host runs a small **token broker** (`daemon/token_broker.py`) the device queries only to (re)fetch credentials — on first boot (empty NVS) and on a provider 401/403. This file is for future Claude Code sessions to bootstrap quickly. Read this first.
 
 ## Architecture
 
@@ -26,6 +26,11 @@ per-board file instead.** Per-board critical pins, I2C addresses, and bring-up o
 live in [`.claude/rules/boards.md`](.claude/rules/boards.md) (auto-loads when editing
 `firmware/src/boards/**`). Walk-through and the interfaces a port must implement:
 [`docs/porting/`](docs/porting/).
+
+Adding a usage **provider** (alongside Claude/Codex) is likewise table-driven —
+one `PROV_*` enum entry + a row in each parallel table (`net.cpp` `PROVIDERS[]` +
+a `fetch_*()`, `ui.cpp` `UI_PROVIDERS[]`, the broker key): see
+[`docs/porting/adding-a-provider.md`](docs/porting/adding-a-provider.md).
 
 ## Build / flash
 
@@ -44,7 +49,7 @@ Device path differs by OS: `/dev/cu.usbmodem*` on macOS, `/dev/ttyACM0` on Linux
 
 The firmware ships a `screenshot` serial command that dumps the LVGL framebuffer. `./screenshot.sh out.png [port]` captures a PNG sized to the active display (480×480 or 368×448). **Use this on every UI iteration** — Read the PNG with the Read tool, verify the change visually, iterate. Script auto-picks the macOS/Linux default port and falls back to pio's bundled Python if pyserial isn't on the system Python.
 
-The boot screen is `SCREEN_SPLASH` and only advances on a physical button press, so a fresh flash will sit on the splash. To screenshot the screen you're actually editing without asking the user to press a button, **temporarily change the default boot screen** in `main.cpp` (search for `ui_show_screen(SCREEN_SPLASH);`) to `SCREEN_USAGE` / `SCREEN_CODEX` / `SCREEN_WIFI`, do your iteration, then revert before committing. (`screenshot.sh` shells out to `ffmpeg` for the raw→PNG step — if it's not installed the capture succeeds but conversion fails; decode the raw RGB565LE yourself or install ffmpeg.)
+The boot screen is `SCREEN_SPLASH` and only advances on a physical button press, so a fresh flash will sit on the splash. To screenshot the screen you're actually editing without asking the user to press a button, **temporarily change the default boot screen** in `main.cpp` (search for `ui_show_screen(SCREEN_SPLASH);`) to a provider screen (`SCREEN_PROVIDER_BASE` is the first provider, `SCREEN_PROVIDER_BASE + 1` the next) or `SCREEN_WIFI`, do your iteration, then revert before committing. (`screenshot.sh` shells out to `ffmpeg` for the raw→PNG step — if it's not installed the capture succeeds but conversion fails; decode the raw RGB565LE yourself or install ffmpeg.)
 
 ## Critical gotchas
 
@@ -72,7 +77,7 @@ See `~/.claude/projects/.../memory/` files for persistent context (user is an em
 
 ## Daemon / host side
 
-The host runs a lightweight **token broker** (`daemon/token_broker.py`, Linux + macOS). It does **no polling and no field-mapping** — it only reads credentials from the host and serves them to the device on request. Endpoints: `GET /tokens` (requires `X-Broker-Key` header) returns `{"claude":{"token":...},"codex":{"token":...,"account_id":...}}` (`200`) when every provider has a usable token, or `409` when at least one needs re-auth (that provider's value is `{"needs_action":...}` while any still-usable provider keeps its token in the same response); `GET /healthz` for liveness. Claude token sourced from `CLAUDE_CODE_OAUTH_TOKEN` env or `~/.config/clawdmeter/claude_setup_token`; Codex from `~/.codex/auth.json`. Broker refuses to start without `CLAWDMETER_BROKER_KEY` set. `systemctl --user start clawdmeter-broker`. **All broker implementation rules — token sourcing, the `200`/`409` contract, and the presence/env-var foot-guns — live in [`.claude/rules/daemon.md`](.claude/rules/daemon.md)** (auto-loads when editing `daemon/**`; read it manually if you touch the firmware JSON parser or `data.h`). The device now handles provider field-mapping; see `.claude/rules/networking.md` for the on-device API contracts.
+The host runs a lightweight **token broker** (`daemon/token_broker.py`, Linux + macOS). It does **no polling and no field-mapping** — it only reads credentials from the host and serves them to the device on request. Endpoints: `GET /tokens` (requires `X-Broker-Key` header) returns `{"claude":{"token":...},"codex":{"token":...,"account_id":...}}` (`200`) when every provider has a usable token, or `409` when at least one needs re-auth (that provider's value is `{"needs_action":...}` while any still-usable provider keeps its token in the same response); `GET /healthz` for liveness. Claude token sourced from `CLAUDE_CODE_OAUTH_TOKEN` env or `~/.config/clawdmeter/claude_setup_token`; Codex from `~/.codex/auth.json`. Broker refuses to start without `CLAWDMETER_BROKER_KEY` set. `systemctl --user start clawdmeter-broker`. **All broker implementation rules — token sourcing, the `200`/`409` contract, and the presence/env-var foot-guns — live in [`.claude/rules/daemon.md`](.claude/rules/daemon.md)** (auto-loads when editing `daemon/**`; read it manually if you touch the on-device provider fetchers in `net.cpp` or `data.h`). The device now handles provider field-mapping directly into `ProviderUsage`; see `.claude/rules/networking.md` for the on-device API contracts.
 
 **WiFi / mDNS model:** The device is a WiFi STA; it resolves the broker host as `<hostname>.local` via mDNS (`WiFi.hostByName()`). No pairing, no MAC cache. WiFi creds + broker host/port + `BROKER_KEY` live in `firmware/src/net_config.h` (gitignored; see committed `net_config.example.h` template — real creds are never committed). No provider tokens in firmware. `daemon/install.sh` / `daemon/install-mac.sh` set up a venv (the broker is stdlib-only) and write the broker secret + Claude setup-token under `~/.config/clawdmeter/`.
 

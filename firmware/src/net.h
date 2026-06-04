@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "data.h"   // UsageData — net writes provider usage directly (no wire JSON)
 
 typedef enum { NET_DISCONNECTED, NET_CONNECTING, NET_ONLINE } net_state_t;
 
@@ -31,8 +32,7 @@ typedef enum {
 void        net_init(void);            // WiFi.begin() with creds from net_config.h
 void        net_tick(void);            // non-blocking: drive reconnect + periodic GET
 net_state_t net_get_state(void);
-bool        net_has_data(void);        // true after a successful GET; CLEARED on read by net_get_data()
-const char* net_get_data(void);        // last-good JSON body; clears has_data
+bool        net_get_usage(UsageData* out);  // true + fills out iff usage changed since last call (clear-on-read)
 void        net_request_refresh(void); // force an immediate GET on next tick
 const char* net_get_ssid(void);        // diagnostics
 const char* net_get_ip(void);          // diagnostics (dotted string)

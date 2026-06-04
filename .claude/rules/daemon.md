@@ -7,10 +7,11 @@ paths:
 
 The daemon is **`daemon/token_broker.py`** — a credential broker, **not** a usage
 poller. It does no polling, no usage field-mapping, and no OAuth refresh. The
-device fetches usage **directly** from the provider APIs and synthesises the
-14-key wire JSON on-device (see `.claude/rules/networking.md` "Device-side provider
-usage mapping"); the broker only hands the device fresh tokens when it asks for
-them (first boot, or after a provider `401`). (The old `claude_usage_daemon.py`
+device fetches usage **directly** from the provider APIs and maps each response
+straight into a `ProviderUsage` on-device — no wire format (see
+`.claude/rules/networking.md` "Device-side provider usage mapping"); the broker
+only hands the device fresh tokens when it asks for them (first boot, or after a
+provider `401`). (The old `claude_usage_daemon.py`
 poller + `/usage` endpoint are retired by this broker — deleted at the cutover
 commit; see `docs/plans/2026-06-04-token-broker-self-sufficient.md`.)
 

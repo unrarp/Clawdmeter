@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <lvgl.h>
-#include <ArduinoJson.h>
 #include <esp_heap_caps.h>
 
 #include "data.h"
@@ -64,42 +63,6 @@ static void my_touch_cb(lv_indev_t* indev, lv_indev_data_t* data) {
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
     }
-}
-
-// Wire keys + present-default per provider, indexed by PROV_*. Order must match
-// the enum in data.h.
-struct ProviderKeys {
-    const char* s; const char* sr; const char* w; const char* wr;
-    const char* st; const char* ok; const char* present; bool present_default;
-};
-static const ProviderKeys PROVIDER_KEYS[PROVIDER_COUNT] = {
-    { "s",  "sr",  "w",  "wr",  "st",  "ok",  "sp", true  },  // Claude: sp defaults true (old payloads => shown)
-    { "cs", "csr", "cw", "cwr", "cst", "cok", "cp", false },  // Codex: cp defaults false (absent on old payloads)
-};
-
-// Parse a JSON line into UsageData.
-static bool parse_json(const char* json, UsageData* out) {
-    JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, json);
-    if (err) {
-        Serial.printf("JSON parse error: %s\n", err.c_str());
-        return false;
-    }
-
-    for (int i = 0; i < PROVIDER_COUNT; i++) {
-        const ProviderKeys& k = PROVIDER_KEYS[i];
-        ProviderUsage& p = out->providers[i];
-        p.session_pct        = doc[k.s]  | -1.0f;
-        p.session_reset_mins = doc[k.sr] | -1;
-        p.weekly_pct         = doc[k.w]  | -1.0f;
-        p.weekly_reset_mins  = doc[k.wr] | -1;
-        strlcpy(p.status, doc[k.st] | "unknown", sizeof(p.status));
-        p.ok      = doc[k.ok]      | false;
-        p.present = doc[k.present] | k.present_default;
-    }
-
-    out->valid = true;
-    return true;
 }
 
 // ---- Serial command buffer ----
@@ -213,9 +176,10 @@ void setup() {
     input_hal_init();
 
     ui_init();
+    usage_health_t h0[PROVIDER_COUNT];
+    for (int i = 0; i < PROVIDER_COUNT; i++) h0[i] = net_provider_health(i);
     ui_update_wifi_status(net_get_state(), net_get_ssid(), net_get_ip(),
-                          net_last_update_ms(),
-                          net_provider_health(PROV_CLAUDE), net_provider_health(PROV_CODEX));
+                          net_last_update_ms(), h0);
     ui_update_battery(power_hal_battery_pct(), power_hal_is_charging());
     ui_show_screen(SCREEN_SPLASH);
 
@@ -223,9 +187,9 @@ void setup() {
         board_caps().name, W, H);
 }
 
-static net_state_t     last_net_state     = NET_DISCONNECTED;
-static usage_health_t  last_claude_health = USAGE_OFFLINE;
-static usage_health_t  last_codex_health  = USAGE_OFFLINE;
+static net_state_t     last_net_state = NET_DISCONNECTED;
+// Per-provider WiFi-page verdict latch (USAGE_OFFLINE == 0 → zero-init is correct).
+static usage_health_t  last_health[PROVIDER_COUNT] = {};
 
 static float max_present_session_pct(const UsageData& u) {
     float m = -1.0f;
@@ -306,14 +270,15 @@ void loop() {
     // but we only touch the labels when a verdict changes, so there's no periodic
     // redraw.
     net_state_t    ns = net_get_state();
-    usage_health_t ch = net_provider_health(PROV_CLAUDE);
-    usage_health_t xh = net_provider_health(PROV_CODEX);
+    usage_health_t h[PROVIDER_COUNT];
+    for (int i = 0; i < PROVIDER_COUNT; i++) h[i] = net_provider_health(i);
     uint32_t       lu = net_last_update_ms();
-    if (ns != last_net_state || ch != last_claude_health || xh != last_codex_health) {
-        last_net_state     = ns;
-        last_claude_health = ch;
-        last_codex_health  = xh;
-        ui_update_wifi_status(ns, net_get_ssid(), net_get_ip(), lu, ch, xh);
+    bool health_changed = false;
+    for (int i = 0; i < PROVIDER_COUNT; i++) health_changed |= (h[i] != last_health[i]);
+    if (ns != last_net_state || health_changed) {
+        last_net_state = ns;
+        for (int i = 0; i < PROVIDER_COUNT; i++) last_health[i] = h[i];
+        ui_update_wifi_status(ns, net_get_ssid(), net_get_ip(), lu, h);
     }
 
     static int  last_pct      = -2;
@@ -328,9 +293,11 @@ void loop() {
 
     check_serial_cmd();
 
-    if (net_has_data()) {
-        UsageData fresh = {};
-        if (parse_json(net_get_data(), &fresh)) {
+    {
+        // net_get_usage fills `fresh` only when it returns true (a changed
+        // snapshot), so no initializer is needed and most ticks do no work here.
+        UsageData fresh;
+        if (net_get_usage(&fresh)) {
             // Any substantive provider-state change (usage %, ok, presence, or
             // status) counts as activity → stay lit + powered. A continuously
             // flapping provider would therefore hold the panel awake.
@@ -346,16 +313,15 @@ void loop() {
                 if (splash_is_active()) splash_pick_for_current_rate();
             }
             ui_update(&usage);
-            // A fresh GET advances the "Updated" timestamp even when the usage
+            // A fresh fetch advances the "Updated" timestamp even when the usage
             // verdict is unchanged (still "live"), so repaint here directly. Reuse
-            // the ns/ch/xh/lu computed at the top of this tick — net state can't
-            // change between net_tick() and here (parse_json only fills `fresh`).
+            // the ns/h/lu computed at the top of this tick — net state can't change
+            // between net_tick() and here (net_get_usage only fills `fresh`).
             // Resync the change-detection latches so the transition check above
             // doesn't repaint again next tick.
-            last_net_state     = ns;
-            last_claude_health = ch;
-            last_codex_health  = xh;
-            ui_update_wifi_status(ns, net_get_ssid(), net_get_ip(), lu, ch, xh);
+            last_net_state = ns;
+            for (int i = 0; i < PROVIDER_COUNT; i++) last_health[i] = h[i];
+            ui_update_wifi_status(ns, net_get_ssid(), net_get_ip(), lu, h);
         }
         // No ack/nack — HTTP pull has no acknowledgement mechanism.
     }

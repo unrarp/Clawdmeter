@@ -14,11 +14,17 @@ struct ProviderUsage {
     bool  present;            // provider is configured on the daemon side
 };
 
-// Provider order is the wire/UI order. Adding a provider: add an enum entry
-// (before PROVIDER_COUNT), a PROVIDER_KEYS row in main.cpp, a widget bundle +
-// ABSENT_MSG entry in ui.cpp, and the device-side fetch + 14-key synthesis in
-// net.cpp (synthesize_payload / fetch_*; the daemon is a token broker and no
-// longer maps providers).
+// Provider order is the UI/fetch order, and the index into every per-provider
+// table. Adding a provider is table-driven — add an enum entry (before
+// PROVIDER_COUNT) and then one row in each table:
+//   - net.cpp:  PROVIDERS[] (broker key + fetch fn) + a fetch_*() + a Cred buffer
+//   - ui.cpp:   UI_PROVIDERS[] (name, logo, accent, absent msg, anim catalog)
+//   - ui.cpp:   a WiFi-page row Y in compute_layout()'s wifi_prov_y[]
+// The screen cycle, widgets, logos, WiFi rows, health array and animation all
+// loop over PROVIDER_COUNT, so nothing else needs touching. The device fetches
+// each provider directly and writes ProviderUsage straight into the UI — there
+// is no wire-JSON layer (the daemon is a token broker, not a usage mapper).
+// Full walkthrough: docs/porting/adding-a-provider.md.
 enum { PROV_CLAUDE = 0, PROV_CODEX, PROVIDER_COUNT };
 
 struct UsageData {

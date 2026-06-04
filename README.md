@@ -130,9 +130,9 @@ View logs: `journalctl --user -u clawdmeter-broker -f`
 ## How it works
 
 1. On first boot (or after a provider 401/403), the firmware contacts the **token broker** (`daemon/token_broker.py`) running on your host over plain HTTP, authenticated with `X-Broker-Key`. The broker reads your Claude `setup-token` and Codex credentials from the host and returns them. The device caches them in NVS; the host can be off after that.
-2. The device fetches usage **directly from both provider APIs over TLS** — Claude via `POST https://api.anthropic.com/v1/messages` (max_tokens:1, scraping the `anthropic-ratelimit-unified-5h/7d-*` response headers) and Codex via `GET https://chatgpt.com/backend-api/wham/usage`. It synthesizes the 14-key wire JSON on-device roughly every 60 seconds.
+2. The device fetches usage **directly from both provider APIs over TLS** — Claude via `POST https://api.anthropic.com/v1/messages` (max_tokens:1, scraping the `anthropic-ratelimit-unified-5h/7d-*` response headers) and Codex via `GET https://chatgpt.com/backend-api/wham/usage`, roughly every 60 seconds (one provider per tick, round-robin).
 3. The session/weekly percentages and reset times come from those API responses. Each provider is independent — if the broker can't supply one's token, that provider is flagged as needing re-auth on the WiFi page while the other keeps working.
-4. `parse_json()` maps the 14-key compact JSON to the `UsageData` struct and the LVGL dashboard repaints.
+4. Each provider's `fetch_*()` maps its response straight into a `ProviderUsage` (no intermediate wire format); `net_get_usage()` hands the changed snapshot to the loop and the LVGL dashboard repaints.
 5. The firmware also tracks the rate of change of session % over a 5-minute window and picks splash animations from the matching mood group.
 
 ## Physical buttons
@@ -158,15 +158,7 @@ The token broker exposes two endpoints:
 
 The broker binds to `0.0.0.0:8080`, gated by the `X-Broker-Key` shared secret over plain HTTP on the trusted LAN. A LAN sniffer can still see tokens in transit — TLS-to-broker is out of scope. The device resolves it via mDNS as `<hostname>.local`.
 
-JSON payload format:
-
-```json
-{ "s": 45, "sr": 120, "w": 28, "wr": 7200, "st": "allowed", "ok": true,
-  "sp": true, "cp": true,
-  "cs": 32, "csr": 90, "cw": 15, "cwr": 5400, "cst": "allowed", "cok": true }
-```
-
-Fields (Claude): `s` = session %, `sr` = session reset (minutes), `w` = weekly %, `wr` = weekly reset (minutes), `st` = status, `ok` = success flag. `sp` / `cp` = provider-present booleans (the device always sends `true`; a provider needing re-auth is surfaced on the WiFi page, not by blanking its panel). Codex mirrors Claude with a `c` prefix: `cs`, `csr`, `cw`, `cwr`, `cst`, `cok`. The firmware synthesizes all 14 keys on-device; each provider has its own success flag (`ok` for Claude, `cok` for Codex), so a present-but-failing provider keeps its last-good numbers with that flag `false` while the other panel stays live.
+`/tokens` is the only JSON the device parses over the network — the credential response shown in the table above. There is **no usage wire format**: each provider's `fetch_*()` maps its API response (headers for Claude, JSON for Codex) directly into a per-provider `ProviderUsage` (session %, session reset, weekly %, weekly reset, status, success flag, present) that the LVGL UI consumes. Each provider carries its own success flag, so a present-but-failing provider keeps its last-good numbers (flag `false`) while the other panel stays live; `present` is always `true` (a provider needing re-auth is surfaced on the WiFi page, not by blanking its panel).
 
 ## Development
 
