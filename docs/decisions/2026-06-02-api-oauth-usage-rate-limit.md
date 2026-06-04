@@ -4,6 +4,13 @@ module: daemon
 tags: [rate-limit, oauth, api-oauth-usage, poll-interval, backoff]
 ---
 
+> **Addendum (2026-06-04):** The 300s constraint below is **moot for the
+> device's current path**. The device no longer calls `/api/oauth/usage`; it
+> scrapes the `anthropic-ratelimit-unified-*` response headers off a
+> `POST /v1/messages` (max_tokens:1) call, which has generous limits and no
+> known rate-limit problems. The 300s rule still applies to anything that
+> DOES hit `/api/oauth/usage` directly (e.g. a host-side daemon).
+
 # `/api/oauth/usage` requires a ≥300s poll interval and a fail-backoff
 
 ## Context

@@ -6,6 +6,15 @@ depends-on: 2026-06-02-codex-usage.md (lands first)
 tags: [wifi, transport, ble-removal, http, daemon, ui]
 ---
 
+> **Partially superseded (2026-06-04):** The "Rejected: on-device OAuth /
+> self-sufficiency" conclusion below has been reversed by
+> [`docs/plans/2026-06-04-token-broker-self-sufficient.md`](2026-06-04-token-broker-self-sufficient.md).
+> Empirical testing found a static Claude `setup-token` escape and a
+> forgiving Codex refresh window, making device-direct TLS + a lightweight
+> token broker cheap enough to be practical. The original reasoning is
+> preserved as history; the current architecture is described in the
+> 2026-06-04 plan.
+
 # Plan: move the data transport from BLE to WiFi (local HTTP)
 
 ## Goal
@@ -329,6 +338,13 @@ deferred work, not blockers:
   network" action to the diagnostics screen (§D).
 
 ## Rejected: on-device OAuth (self-sufficiency)
+
+> **This rejection has been reversed by the 2026-06-04 token-broker plan.**
+> A static Claude `setup-token` eliminates the hourly-rotation problem, and
+> the Codex token refresh window proved forgiving enough for device-direct
+> use with a token broker. See
+> [`docs/plans/2026-06-04-token-broker-self-sufficient.md`](2026-06-04-token-broker-self-sufficient.md).
+> The original analysis below is preserved as history.
 
 Captured so it isn't re-litigated. Making the device daemon-free requires it to
 poll `api.anthropic.com` itself, which forces **all** of:

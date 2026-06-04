@@ -13,7 +13,7 @@ Two reference ports today:
 
 The shared code calls a small HAL (`firmware/src/hal/`) that each board implements: display, touch, input, power, IMU. Optional features are guarded by `BoardCaps` (runtime) and `BOARD_HAS_*` (compile-time) rather than `#ifdef BOARD_*`.
 
-Connects to a host daemon over WiFi/HTTP; the device polls `GET http://<daemon-host>:8080/usage` (every ~60 s) and the daemon caches the latest combined snapshot from the Anthropic (Claude) and OpenAI (Codex) usage APIs. This file is for future Claude Code sessions to bootstrap quickly. Read this first.
+The device fetches usage **directly from both provider APIs over TLS** (~60 s interval) and synthesizes the 14-key wire JSON on-device (`firmware/src/net.cpp`); the host runs a small **token broker** (`daemon/token_broker.py`) the device queries only to (re)fetch credentials — on first boot (empty NVS) and on a provider 401/403. This file is for future Claude Code sessions to bootstrap quickly. Read this first.
 
 ## Architecture
 
@@ -72,11 +72,11 @@ See `~/.claude/projects/.../memory/` files for persistent context (user is an em
 
 ## Daemon / host side
 
-Single cross-platform Python daemon (`daemon/claude_usage_daemon.py`, Linux + macOS) polls **two** providers — Anthropic (Claude) and OpenAI (Codex) — and serves the latest combined snapshot as JSON over HTTP. The device fetches `GET http://<daemon-host>:8080/usage` on the LAN; daemon binds `0.0.0.0:8080`, no auth, plain HTTP (trusted LAN only). `systemctl --user start claude-usage-daemon`. **All daemon implementation rules — API field-mapping, the 14-key wire format, poll constants (300s/5s tick/60s backoff), token handling, and the presence/cache/env-var foot-guns — live in [`.claude/rules/daemon.md`](.claude/rules/daemon.md)** (auto-loads when editing `daemon/**`; read it manually if you touch the firmware JSON parser or `data.h`) and `docs/decisions/2026-06-02-api-oauth-usage-rate-limit.md`.
+The host runs a lightweight **token broker** (`daemon/token_broker.py`, Linux + macOS). It does **no polling and no field-mapping** — it only reads credentials from the host and serves them to the device on request. Endpoints: `GET /tokens` (requires `X-Broker-Key` header) returns `{"claude":{"token":...},"codex":{"token":...,"account_id":...}}` (`200`) when every provider has a usable token, or `409` when at least one needs re-auth (that provider's value is `{"needs_action":...}` while any still-usable provider keeps its token in the same response); `GET /healthz` for liveness. Claude token sourced from `CLAUDE_CODE_OAUTH_TOKEN` env or `~/.config/clawdmeter/claude_setup_token`; Codex from `~/.codex/auth.json`. Broker refuses to start without `CLAWDMETER_BROKER_KEY` set. `systemctl --user start clawdmeter-broker`. **All broker implementation rules — token sourcing, the `200`/`409` contract, and the presence/env-var foot-guns — live in [`.claude/rules/daemon.md`](.claude/rules/daemon.md)** (auto-loads when editing `daemon/**`; read it manually if you touch the firmware JSON parser or `data.h`). The device now handles provider field-mapping; see `.claude/rules/networking.md` for the on-device API contracts.
 
-**WiFi / mDNS model:** The device is a WiFi STA; it resolves the daemon host as `<hostname>.local` via mDNS (`WiFi.hostByName()`). No pairing, no MAC cache. Creds + daemon host/port live in `firmware/src/net_config.h` (gitignored; see committed `net_config.example.h` template — real creds are never committed). `install.sh` / `install-mac.sh` set up a venv with `httpx` only — no bluetooth prereqs.
+**WiFi / mDNS model:** The device is a WiFi STA; it resolves the broker host as `<hostname>.local` via mDNS (`WiFi.hostByName()`). No pairing, no MAC cache. WiFi creds + broker host/port + `BROKER_KEY` live in `firmware/src/net_config.h` (gitignored; see committed `net_config.example.h` template — real creds are never committed). No provider tokens in firmware. `daemon/install.sh` / `daemon/install-mac.sh` set up a venv (the broker is stdlib-only) and write the broker secret + Claude setup-token under `~/.config/clawdmeter/`.
 
 **Operating foot-guns:**
 
-- The unit's `ExecStart` points to the venv Python + `daemon/claude_usage_daemon.py` absolute path — repoint it when switching between the worktree and the main checkout.
-- The daemon is a long-running `while` loop: editing the script changes nothing until `systemctl --user restart` — the old logic stays resident (this is how you get a stale daemon silently serving the old wire format).
+- The unit's `ExecStart` points to the venv Python + `daemon/token_broker.py` absolute path — repoint it when switching between the worktree and the main checkout.
+- The broker is a long-running `while` loop: editing the script changes nothing until `systemctl --user restart` — the old logic stays resident.

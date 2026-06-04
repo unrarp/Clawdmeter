@@ -1,10 +1,11 @@
 [Unit]
-Description=Clawdmeter Usage Daemon (HTTP)
+Description=Clawdmeter Token Broker (HTTP)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
+EnvironmentFile=%h/.config/clawdmeter/broker.env
 ExecStart=__VENV_PYTHON__ __DAEMON_PATH__
 Restart=on-failure
 RestartSec=5

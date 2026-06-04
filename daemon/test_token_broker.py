@@ -121,12 +121,32 @@ class BuildTokensTests(unittest.TestCase):
         self.assertEqual(code, 409)
         self.assertIn("expired", body["codex"]["needs_action"])
 
+    def test_near_expiry_codex_is_409(self):
+        # Still valid by the clock, but within CODEX_EXP_MARGIN of expiry — must
+        # be treated as unusable so the device re-auths before the token dies.
+        with patch.object(b, "claude_token", lambda: "X"), \
+             patch.object(b, "codex_creds",
+                          lambda: (mkjwt(int(time.time()) + b.CODEX_EXP_MARGIN - 30), "acct")):
+            code, body = b.build_tokens()
+        self.assertEqual(code, 409)
+        self.assertIn("expired", body["codex"]["needs_action"])
+
     def test_unparseable_codex_is_409(self):
         with patch.object(b, "claude_token", lambda: "X"), \
              patch.object(b, "codex_creds", lambda: ("garbage", "acct")):
             code, body = b.build_tokens()
         self.assertEqual(code, 409)
         self.assertIn("unparseable", body["codex"]["needs_action"])
+
+    def test_both_absent_is_409_with_needs_action_and_no_tokens(self):
+        with patch.object(b, "claude_token", lambda: None), \
+             patch.object(b, "codex_creds", lambda: None):
+            code, body = b.build_tokens()
+        self.assertEqual(code, 409)
+        self.assertIn("needs_action", body["claude"])
+        self.assertNotIn("token", body["claude"])
+        self.assertIn("needs_action", body["codex"])
+        self.assertNotIn("token", body["codex"])
 
 
 class HttpEndpointTests(unittest.TestCase):

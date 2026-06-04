@@ -35,7 +35,20 @@ Tick as each lands with its verification.
       **Verified:** both envs build (`216` + `18`). **Not yet runtime-tested:**
       empty-NVS boot → broker fetch → render and the `401`-refetch path need a
       live broker on the device's port + a flash — folded into the 4 cutover.
-- [ ] **4. Docs + lockstep cutover** — doc sweep + combined daemon+firmware flash
+- [x] **4. Docs + lockstep cutover** — DONE (2026-06-04). **Doc sweep:** README,
+      AGENTS, `.claude/rules/{daemon,networking,boards}.md`, the
+      2026-06-02 wifi-transport plan + oauth-rate-limit decision, and the mDNS
+      spike updated to the broker model; device-side provider field-mapping moved
+      `daemon.md` → `networking.md`. **Cutover:** service/plist **renamed**
+      `claude-usage-daemon` → `clawdmeter-broker` and repointed at `token_broker.py`;
+      installers hardened (secrets under `~/.config/clawdmeter/`, `sed`→python+XML
+      escape, empty-key guard, `read -s`, retire-old-unit, httpx dropped). **Live
+      cutover verified on hardware:** old daemon stopped, broker installed, device
+      (1.8″) flashed → empty-NVS `GET /tokens 200` (broker journal) → Claude
+      `s=79/w=1` + Codex `cs=14/cw=5` rendered over serial. **Removed:**
+      `claude_usage_daemon.py`, `test_daemon.py`, and the dead BLE-era root
+      `install.sh`/`install-mac.sh` (the README's installer commands now point at
+      `daemon/install*.sh`). Broker tests: 22 pass.
 
 Ordering: 1 before 3 (gate); 2 before 3b; 4 last. 2 and 3a are independent
 (parallelizable). Lands as ~3 reviewable changes (broker; 3a; 3b+cutover) plus

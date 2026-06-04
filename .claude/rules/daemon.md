@@ -3,26 +3,94 @@ paths:
   - "daemon/**"
 ---
 
-# Daemon rules
+# Daemon rules (token broker)
 
-- **`/api/oauth/usage` requires `POLL_INTERVAL ≥ 300s` and a fail-backoff.** The endpoint returns 429/529 above ~1 req/min. Use a fixed 300s interval plus a `POLL_FAIL_BACKOFF` (60s) so a failed poll retries after 60s rather than after the full 300s *or* at every 5s tick. Do NOT lower the interval — upstream tried 60s (PR #29), saw rate-limit storms, and reverted (PR #37). Even 5-min exponential backoff reportedly still hit limits for some users; 300s fixed has been stable in practice. → see `docs/decisions/2026-06-02-api-oauth-usage-rate-limit.md`
+The daemon is **`daemon/token_broker.py`** — a credential broker, **not** a usage
+poller. It does no polling, no usage field-mapping, and no OAuth refresh. The
+device fetches usage **directly** from the provider APIs and synthesises the
+14-key wire JSON on-device (see `.claude/rules/networking.md` "Device-side provider
+usage mapping"); the broker only hands the device fresh tokens when it asks for
+them (first boot, or after a provider `401`). (The old `claude_usage_daemon.py`
+poller + `/usage` endpoint are retired by this broker — deleted at the cutover
+commit; see `docs/plans/2026-06-04-token-broker-self-sufficient.md`.)
 
-- **Codex usage = `GET https://chatgpt.com/backend-api/wham/usage`** (undocumented; verified 200). Auth mirrors the Claude path but with a *different* creds file and header: `Authorization: Bearer <tokens.access_token>` + `ChatGPT-Account-Id: <tokens.account_id>`, both read from `~/.codex/auth.json` (NOT `~/.claude/.credentials.json`). Response `rate_limit.primary_window` (18000s) → 5h/session (`cs`/`csr`), `secondary_window` (604800s) → 7d/weekly (`cw`/`cwr`); `used_percent` is already 0–100; `reset_after_seconds` is minutes-from-now directly (÷60, no ISO math). `cst` = `limited` if `!allowed`/`limit_reached`/`cs ≥ 100`. Rate-limit tolerance is unverified — start at the same 300s and only relax after measuring. Full mapping/plan in `docs/plans/2026-06-02-codex-usage.md` §A.
+- **Endpoints + status code = the device's whole decision tree.** `GET /tokens`
+  (requires the `X-Broker-Key` header) answers in one round-trip:
+  - `200` `{"claude":{"token":...},"codex":{"token":...,"account_id":...}}` — every
+    provider has a token that works *right now*.
+  - `409` — at least one provider can't be supplied; that provider's value is
+    `{"needs_action":"<human string>"}` (no `token`). Usable siblings still carry
+    their token. The device caches the usable ones, marks the `409` provider
+    needs-action, and stops refetching it until the next successful `/tokens`.
 
-- **Claude field mapping:** `/api/oauth/usage` returns `{five_hour,seven_day,...}` with `utilization` already a **0–100 percentage** (no ×100) and `resets_at` as ISO-8601. `five_hour` and `seven_day` are *objects*, not scalars: `five_hour.utilization`→`s`, `five_hour.resets_at`→`sr` (ISO→minutes), and likewise `seven_day.{utilization,resets_at}`→`w`/`wr`. `st` is derived (`limited` if session util ≥ 100). Bearer = subscription OAuth token, `anthropic-beta: oauth-2025-04-20`, needs `user:profile` scope. (Pre-Codex versions scraped rate-limit *headers* off a throwaway 1-token `/v1/messages` POST — generous limits but burned a token + spoofed the client; don't reintroduce that.)
+  `GET /healthz` → `200 {"ok":true}` (no auth). `expires_at` is deliberately
+  omitted — the broker guarantees freshness before answering; the device's
+  `401`-refetch is the freshness mechanism.
 
-- **Wire = a full 14-key snapshot every cycle, never partial.** Keys: `s/sr/w/wr/st/ok` (Claude) + `sp/cp` (presence booleans, re-checked every cycle — "creds file exists" on Linux/bash and for Codex; macOS Claude uses a sticky `_claude_seen` latch, see below) + `cs/csr/cw/cwr/cst/cok` (Codex). Poll every present provider, hold a per-provider last-good cache, and always write all 14 keys so one provider's failure never blanks the other's panel. Each provider carries its own success flag (`ok` for Claude, `cok` for Codex): a present-but-failing provider keeps its last-good numbers with that flag `false` (device dims them); a never-succeeded provider sends `-1` sentinels (device shows "Connecting…"). The cycle counts as success (advances the poll timer) if *any* present provider polled OK, else it takes `POLL_FAIL_BACKOFF`.
+- **The broker NEVER refreshes or mints tokens (locked constraint).** It only
+  reads credentials already on the host (kept current by normal Claude Code /
+  Codex CLI use) and decides usable-vs-needs-action. No `grant_type=refresh_token`,
+  no CLI subprocess. `codex exec` *cannot* refresh ("auth token refresh is not
+  supported in exec mode"), so pass-through is the only viable shape.
 
-- **The daemon reads the OAuth token, never refreshes it — and the poll must stay host-side.** `read_token()` greps `accessToken` out of `~/.claude/.credentials.json` (Keychain on macOS) every cycle; that access token is short-lived (~1h) and rotates, so the daemon piggybacks on Claude Code keeping the creds fresh. Don't try to drop the daemon by moving the Anthropic poll onto the device: a platform `sk-ant-…` key is a *different account* and can't see subscription usage, and a device refreshing from the *same* refresh-token lineage fights the laptop's Claude Code (rotating refresh tokens → one side gets logged out). Real device self-sufficiency needs a *device-dedicated* OAuth login + on-device TLS. → see `docs/plans/2026-06-02-wifi-transport.md` "Rejected: on-device OAuth".
+- **Token sourcing, per provider:**
+  - **Claude** = a `claude setup-token` (inference-scoped, ~1 yr). Read from
+    `CLAUDE_CODE_OAUTH_TOKEN` env, else the file
+    `~/.config/clawdmeter/claude_setup_token` (override:
+    `CLAWDMETER_CLAUDE_TOKEN_FILE`). Forwarded **verbatim** — must be a raw token,
+    not a JSON credentials blob. Expiry is *not* locally readable (opaque token),
+    so **presence is the only gate**; a truly-expired setup-token surfaces only as
+    the device's retry still 401-ing → device then shows needs-action.
+  - **Codex** = `tokens.access_token` + `tokens.account_id` from
+    `~/.codex/auth.json`. The access_token is a JWT (~10-day life); `jwt_exp()`
+    decodes its `exp` locally (zero cost) and the broker serves it while >5 min
+    from expiry (`CODEX_EXP_MARGIN`), else `409`/needs-action.
 
-- **`POLL_INTERVAL=300`, `TICK=5`, `POLL_FAIL_BACKOFF=60`.** The inner loop wakes every 5s; it polls upstream only when 300s have elapsed. A failed/throttled poll backs off 60s — not the full interval, not every tick.
+- **`CLAWDMETER_BROKER_KEY` is required — the broker refuses to start without it**
+  (it vends spendable credentials). `_authorized()` also returns `False` when the
+  key is unset even if the startup guard were bypassed, and compares with
+  `hmac.compare_digest` against the `X-Broker-Key` header — there is never an
+  allow-all path. Transport is plain HTTP on the trusted LAN: the shared secret
+  stops casual other-device access but a LAN sniffer still sees tokens in transit
+  (accepted; TLS-to-broker is out of scope).
 
-- **Per-provider last-good cache must be cleared when a provider goes absent.** The daemon holds `_claude_last`/`_codex_last`. If a provider's creds file disappears and then reappears — e.g. the user removes and re-adds a Codex account — the cache from the previous account would be served as "stale" data (`ok:false`, last-good numbers) rather than the `-1`/Connecting sentinel the plan requires. This is handled in `resolve_provider()`: the absent branch (`not present`) returns `None` as the new last-good, which `build_payload` writes back to `_claude_last`/`_codex_last`, clearing the cache. Keep that absent→`None` behavior if you refactor the merge.
+- **Stdlib-only — no `httpx`/`asyncio`/subprocess.** `ThreadingHTTPServer`; the
+  SIGINT/SIGTERM handler runs `server.shutdown()` **off** the serving thread
+  (calling it inline would deadlock) then `server_close()` releases the socket.
+  Binds `0.0.0.0:8080` (override `CLAWDMETER_PORT`). Tests: `daemon/test_token_broker.py`.
 
-- **macOS `claude_present()` must use a sticky latch, not a bare Keychain read.** On macOS the Claude token lives in the Keychain, not a file, so `claude_present()` calls `read_token()` which calls `security find-generic-password`. A transient Keychain denial or timeout returns `None`, which propagates as `sp:false` — the device shows "No Claude account" even though the account is still configured. Fix: set a module-level `_claude_seen = True` the first time the token is successfully read, and return `_claude_seen` as a fallback when the Keychain call fails. A real account removal requires a daemon restart; transient denials should be absorbed.
+- **Editing the script changes nothing until restart.** Long-running process —
+  `systemctl --user restart clawdmeter-broker` (Linux) or reload the LaunchAgent
+  (macOS), or the old logic stays resident. The unit's `ExecStart` points at the
+  venv python + `daemon/token_broker.py` (absolute) — repoint when switching
+  between the worktree and the main checkout. Secrets live under
+  `~/.config/clawdmeter/` (`broker.env` = `CLAWDMETER_BROKER_KEY`,
+  `claude_setup_token`), mode 600, never committed.
 
-- **Delivery is HTTP, not BLE.** The daemon is a single cross-platform Python file (`claude_usage_daemon.py`) running on both Linux and macOS. It serves the lock-guarded last payload via `ThreadingHTTPServer` bound to `0.0.0.0:8080`: `GET /usage` → `200 application/json` (or `503` before the first successful poll), `GET /healthz` for liveness. No auth — trusted home LAN, usage percentages only. The device pulls via `GET http://<daemon-host>:<port>/usage` over plain HTTP (no TLS). There is no BLE stack, no GATT, no MAC cache, no `dbus-monitor` pipe, no pairing step.
+- **Never inject an arbitrary secret into a launchd plist with `sed`.** A `BROKER_KEY`
+  containing `&`, `|`, `\`, `<`, or `>` silently corrupts the plist: `&` expands to the
+  matched text, `|` closes the `s|||` expression early, `<>` breaks XML. Use python with
+  `xml.sax.saxutils.escape`: `python3 -c "import os,pathlib,xml.sax.saxutils as x; p=pathlib.Path(os.environ['PLIST_DEST']); p.write_text(p.read_text().replace('__KEY__', x.escape(os.environ['KEY'])))"` — pass the secret via env, not shell interpolation. The systemd/EnvironmentFile path avoids this entirely (Linux install).
+  → see `docs/decisions/2026-06-04-plist-secret-injection.md`
+
+- **Use `read -s` (silent mode) when prompting for secrets in install scripts.**
+  Plain `read -r -p` echoes the typed characters to the terminal (visible over the
+  shoulder) and captures them in shell history (`~/.bash_history`). Use `read -r -s -p
+  "prompt: " VAR; echo` — the trailing `echo` adds the newline the silent read suppresses.
+  Validate non-empty immediately after: `[ -n "$VAR" ] || { echo "must not be empty" >&2; exit 1; }`.
+
+- **On cutover/rename: run `git grep <old-name>` repo-wide before closing the task.**
+  A diff-scoped review (including all /xverify arms) only flags issues in the changed
+  lines — stale references in *unchanged* files are structurally invisible to it. At the
+  Phase-4 cutover, the README's `./install*.sh` commands pointed at dead BLE-era root
+  scripts that still referenced the deleted `claude_usage_daemon.py`; caught only at
+  commit time via `git grep`. Make repo-wide grep a mandatory last step for any rename or
+  removal, separate from the /xverify pass.
 
 ## Related decisions
 
-- `2026-06-02-api-oauth-usage-rate-limit` — why `/api/oauth/usage` requires 300s polling and a fail-backoff; upstream revert history and empirical rate-limit findings.
+- `2026-06-04-token-broker-self-sufficient` (plan) — the device-direct + broker design.
+- `2026-06-04-plist-secret-injection` — why `sed` corrupts secrets with `&|<>\` and how to fix with python+xml.sax.saxutils.
+- `2026-06-02-api-oauth-usage-rate-limit` — the 300s `/api/oauth/usage` constraint;
+  now **moot for the device's path** (it scrapes `/v1/messages` response headers,
+  not `/api/oauth/usage`). Still applies to anything that hits `/api/oauth/usage`.

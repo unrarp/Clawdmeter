@@ -20,4 +20,4 @@
 // Any HTTP response (even 404) confirms TCP works. 0 = resolution-only.
 #define HTTP_TEST       1
 #define HTTP_TEST_PORT  8080
-#define HTTP_TEST_PATH  "/usage"
+#define HTTP_TEST_PATH  "/healthz"

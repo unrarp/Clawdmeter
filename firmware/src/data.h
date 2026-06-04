@@ -16,8 +16,9 @@ struct ProviderUsage {
 
 // Provider order is the wire/UI order. Adding a provider: add an enum entry
 // (before PROVIDER_COUNT), a PROVIDER_KEYS row in main.cpp, a widget bundle +
-// ABSENT_MSG entry in ui.cpp, and a Provider entry (+ wire keys) in the
-// PROVIDERS list in daemon/claude_usage_daemon.py.
+// ABSENT_MSG entry in ui.cpp, and the device-side fetch + 14-key synthesis in
+// net.cpp (synthesize_payload / fetch_*; the daemon is a token broker and no
+// longer maps providers).
 enum { PROV_CLAUDE = 0, PROV_CODEX, PROVIDER_COUNT };
 
 struct UsageData {

@@ -2,7 +2,7 @@
 
 A small ESP32 dashboard I made for my desk to keep an eye on my Claude Code (and Codex) usage at a glance.
 
-It runs on a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786) plus a few other boards (see [Hardware](#hardware)). The device connects to your WiFi network and pulls usage data from a small host daemon over plain HTTP. The daemon polls your Claude and Codex usage every 5 minutes and caches the result; the display fetches and renders it roughly every 60 seconds. The splash screen plays pixel-art Clawd animations that get busier as your usage rate climbs.
+It runs on a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786) plus a few other boards (see [Hardware](#hardware)). The device connects to your WiFi network and fetches usage data **directly** from the Anthropic and Codex APIs over TLS, refreshing roughly every 60 seconds. The host runs a small **token broker** that hands the device its API credentials on first boot and whenever a provider returns 401 — otherwise the laptop can be off. The splash screen plays pixel-art Clawd animations that get busier as your usage rate climbs.
 
 |              Usage meter              |              Clawd animation screen              |
 | :-----------------------------------: | :----------------------------------------------: |
@@ -37,7 +37,7 @@ Boards supported out of the box:
 
 - Linux (tested on Ubuntu) or macOS
 - [PlatformIO CLI](https://docs.platformio.org/en/latest/core/installation/index.html)
-- `python3` (the installer sets up a venv with `httpx`)
+- `python3` (the broker is stdlib-only; the installer just creates a venv)
 - Claude Code with an active subscription (and/or the Codex CLI signed in, if you want the Codex screen)
 - The device and the host machine must be on the same WiFi network
 
@@ -54,10 +54,11 @@ Before flashing, copy `firmware/src/net_config.example.h` to `firmware/src/net_c
 #define WIFI_PASSWORD  "YourPassword"
 #define DAEMON_HOST    "my-macbook.local"   // your machine's mDNS hostname
 #define DAEMON_PORT    8080
+#define BROKER_KEY     "a-long-random-secret"  // must match CLAWDMETER_BROKER_KEY on the broker
 #define FETCH_INTERVAL_MS  60000
 ```
 
-`DAEMON_HOST` is your machine's mDNS hostname (typically `<computer-name>.local`) — no static IP needed.
+`DAEMON_HOST` is your machine's mDNS hostname (typically `<computer-name>.local`) — no static IP needed. `BROKER_KEY` is a shared secret you choose; set `CLAWDMETER_BROKER_KEY` to the same value in the broker's environment.
 
 ### Flash the firmware
 
@@ -68,23 +69,23 @@ Before flashing, copy `firmware/src/net_config.example.h` to `firmware/src/net_c
 
 The board env name is required. Run `./flash-mac.sh` with no args to see the available envs (scraped from `firmware/platformio.ini`).
 
-### Install the daemon
+### Install the token broker
 
-The daemon reads your Claude OAuth token from the macOS Keychain (service `Claude Code-credentials`) — and your Codex token from `~/.codex/auth.json` if present — polls usage every 5 minutes, and serves the result over HTTP on port 8080.
+The token broker reads your Claude `setup-token` (from `CLAUDE_CODE_OAUTH_TOKEN` or `~/.config/clawdmeter/claude_setup_token`) and your Codex credentials from `~/.codex/auth.json`, and hands them to the device on demand. It does no polling.
 
 ```bash
-./install-mac.sh
+./daemon/install-mac.sh
 ```
 
-The installer creates a Python venv in `daemon/.venv/`, installs `httpx`, and renders a LaunchAgent into `~/Library/LaunchAgents/com.user.claude-usage-daemon.plist`.
+The installer creates a Python venv in `daemon/.venv/` (the broker is stdlib-only) and renders a LaunchAgent into `~/Library/LaunchAgents/com.user.clawdmeter-broker.plist`.
 
 Useful commands:
 
 ```bash
-launchctl list | grep claude-usage                                          # check it's running
-tail -F ~/Library/Logs/clawdmeter.stdout.log                                # live logs
-launchctl unload ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist  # stop
-launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # start
+launchctl list | grep clawdmeter                                               # check it's running
+tail -F ~/Library/Logs/clawdmeter.stdout.log                                   # live logs
+launchctl unload ~/Library/LaunchAgents/com.user.clawdmeter-broker.plist       # stop
+launchctl load -w ~/Library/LaunchAgents/com.user.clawdmeter-broker.plist      # start
 ```
 
 ## Linux installation
@@ -98,10 +99,11 @@ Before flashing, copy `firmware/src/net_config.example.h` to `firmware/src/net_c
 #define WIFI_PASSWORD  "YourPassword"
 #define DAEMON_HOST    "my-laptop.local"   // your machine's mDNS hostname
 #define DAEMON_PORT    8080
+#define BROKER_KEY     "a-long-random-secret"  // must match CLAWDMETER_BROKER_KEY on the broker
 #define FETCH_INTERVAL_MS  60000
 ```
 
-`DAEMON_HOST` is your machine's mDNS hostname (typically `<computer-name>.local`) — no static IP needed.
+`DAEMON_HOST` is your machine's mDNS hostname (typically `<computer-name>.local`) — no static IP needed. `BROKER_KEY` is a shared secret you choose; set `CLAWDMETER_BROKER_KEY` to the same value in the broker's environment.
 
 ### Flash the firmware
 
@@ -112,28 +114,26 @@ Before flashing, copy `firmware/src/net_config.example.h` to `firmware/src/net_c
 
 The board env name is required. Run `./flash.sh` with no args to see the available envs (scraped from `firmware/platformio.ini`).
 
-### Install the daemon
+### Install the token broker
 
-The daemon polls your Claude (and Codex, if configured) usage every 5 minutes and serves the result over HTTP on port 8080. The device fetches it over your local network — no pairing, no Bluetooth.
+The token broker reads your Claude `setup-token` and Codex credentials from the host and serves them to the device on demand over HTTP on port 8080. The device fetches usage directly from the provider APIs — no polling on the host side.
 
 ```bash
-./install.sh
-systemctl --user start claude-usage-daemon
+./daemon/install.sh
+systemctl --user start clawdmeter-broker
 ```
 
-Check status: `systemctl --user status claude-usage-daemon`
+Check status: `systemctl --user status clawdmeter-broker`
 
-View logs: `journalctl --user -u claude-usage-daemon -f`
+View logs: `journalctl --user -u clawdmeter-broker -f`
 
 ## How it works
 
-1. The daemon reads your Claude Code OAuth token — from the macOS Keychain (service `Claude Code-credentials`) on macOS, or from `~/.claude/.credentials.json` on Linux — and, if present, your Codex token from `~/.codex/auth.json`.
-2. It polls each provider's read-only usage endpoint — Anthropic's `api.anthropic.com/api/oauth/usage` and OpenAI's Codex `chatgpt.com/backend-api/wham/usage` — every 5 minutes (both are rate-limited).
-3. The session/weekly percentages and reset times come straight out of those JSON responses. Each provider is independently optional — one you haven't set up just shows a "No account" screen rather than disappearing.
-4. The daemon caches the latest result and serves it as JSON over HTTP (`GET http://<host>:8080/usage`) on your local network.
-5. The firmware connects to your WiFi network, resolves the daemon host via mDNS (`<hostname>.local`), and fetches the payload roughly every 60 seconds.
-6. `parse_json()` maps the 14-key compact JSON to the `UsageData` struct and the LVGL dashboard repaints.
-7. The firmware also tracks the rate of change of session % over a 5-minute window and picks splash animations from the matching mood group.
+1. On first boot (or after a provider 401/403), the firmware contacts the **token broker** (`daemon/token_broker.py`) running on your host over plain HTTP, authenticated with `X-Broker-Key`. The broker reads your Claude `setup-token` and Codex credentials from the host and returns them. The device caches them in NVS; the host can be off after that.
+2. The device fetches usage **directly from both provider APIs over TLS** — Claude via `POST https://api.anthropic.com/v1/messages` (max_tokens:1, scraping the `anthropic-ratelimit-unified-5h/7d-*` response headers) and Codex via `GET https://chatgpt.com/backend-api/wham/usage`. It synthesizes the 14-key wire JSON on-device roughly every 60 seconds.
+3. The session/weekly percentages and reset times come from those API responses. Each provider is independent — if the broker can't supply one's token, that provider is flagged as needing re-auth on the WiFi page while the other keeps working.
+4. `parse_json()` maps the 14-key compact JSON to the `UsageData` struct and the LVGL dashboard repaints.
+5. The firmware also tracks the rate of change of session % over a 5-minute window and picks splash animations from the matching mood group.
 
 ## Physical buttons
 
@@ -141,7 +141,7 @@ The 2.16″ board has three side buttons (the 1.8″ port has only Left/BOOT and
 
 | Button           | GPIO         | Function                                                       |
 | ---------------- | ------------ | -------------------------------------------------------------- |
-| **Left**         | GPIO 0       | Force an immediate `/usage` refresh                            |
+| **Left**         | GPIO 0       | Force an immediate usage refresh                               |
 | **Middle** (PWR) | AXP2101 PKEY | Cycle screens (Claude → Codex → WiFi); on splash, cycle anims  |
 | **Right**        | GPIO 18      | Currently unused                                               |
 
@@ -149,14 +149,14 @@ HID keyboard output (Space / Shift+Tab) has been removed along with Bluetooth. T
 
 ## HTTP protocol
 
-The daemon exposes a single HTTP endpoint:
+The token broker exposes two endpoints:
 
-| Endpoint      | Method | Description                              |
-| ------------- | ------ | ---------------------------------------- |
-| `/usage`      | GET    | Latest 14-key usage JSON (`200`) or `503` if no poll has succeeded yet |
-| `/healthz`    | GET    | Daemon liveness check                    |
+| Endpoint   | Method | Auth            | Description                              |
+| ---------- | ------ | --------------- | ---------------------------------------- |
+| `/tokens`  | GET    | `X-Broker-Key`  | Per-provider credentials: `200` = all usable `{"claude":{"token":...},"codex":{"token":...,"account_id":...}}`; `409` = at least one provider needs re-auth (that provider carries `{"needs_action":...}`; any still-usable provider keeps its token) |
+| `/healthz` | GET    | none            | Broker liveness check                    |
 
-The daemon binds to `0.0.0.0:8080` (unauthenticated — trusted home LAN). The device resolves it via mDNS as `<hostname>.local`.
+The broker binds to `0.0.0.0:8080`, gated by the `X-Broker-Key` shared secret over plain HTTP on the trusted LAN. A LAN sniffer can still see tokens in transit — TLS-to-broker is out of scope. The device resolves it via mDNS as `<hostname>.local`.
 
 JSON payload format:
 
@@ -166,7 +166,7 @@ JSON payload format:
   "cs": 32, "csr": 90, "cw": 15, "cwr": 5400, "cst": "allowed", "cok": true }
 ```
 
-Fields (Claude): `s` = session %, `sr` = session reset (minutes), `w` = weekly %, `wr` = weekly reset (minutes), `st` = status, `ok` = success flag. `sp` / `cp` = Claude / Codex account present (booleans). Codex mirrors Claude with a `c` prefix: `cs`, `csr`, `cw`, `cwr`, `cst`, `cok`. The daemon always serves all 14 keys; each provider has its own success flag (`ok` for Claude, `cok` for Codex), so a present-but-failing provider keeps its last-good numbers with that flag `false` while the other panel stays live.
+Fields (Claude): `s` = session %, `sr` = session reset (minutes), `w` = weekly %, `wr` = weekly reset (minutes), `st` = status, `ok` = success flag. `sp` / `cp` = provider-present booleans (the device always sends `true`; a provider needing re-auth is surfaced on the WiFi page, not by blanking its panel). Codex mirrors Claude with a `c` prefix: `cs`, `csr`, `cw`, `cwr`, `cst`, `cok`. The firmware synthesizes all 14 keys on-device; each provider has its own success flag (`ok` for Claude, `cok` for Codex), so a present-but-failing provider keeps its last-good numbers with that flag `false` while the other panel stays live.
 
 ## Development
 

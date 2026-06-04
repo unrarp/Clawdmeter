@@ -2,8 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- Clawdmeter Token Broker — replaces the old usage daemon -->
     <key>Label</key>
-    <string>com.user.claude-usage-daemon</string>
+    <string>com.user.clawdmeter-broker</string>
 
     <key>ProgramArguments</key>
     <array>
@@ -38,6 +39,9 @@
         <string>__HOME__</string>
         <key>PATH</key>
         <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <!-- CLAWDMETER_BROKER_KEY: installer substitutes __BROKER_KEY__ at install time -->
+        <key>CLAWDMETER_BROKER_KEY</key>
+        <string>__BROKER_KEY__</string>
     </dict>
 </dict>
 </plist>
