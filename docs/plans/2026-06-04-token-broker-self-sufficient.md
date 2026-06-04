@@ -16,8 +16,9 @@ Tick as each lands with its verification.
 - [x] **1. TLS spike** (gate) — PASS on ESP32-S3 (`firmware/tools/tls_spike`,
       2026-06-04): cert-bundle-validated TLS to both hosts, Claude header-scrape,
       Codex JSON parse, forced-`401` all green
-- [ ] **2. Broker** (no hardware) — `/tokens` + `/healthz` + `409` + `X-Broker-Key`;
-      `curl`-verified against real laptop creds
+- [x] **2. Broker** — DONE (`daemon/token_broker.py`, 2026-06-04). `/tokens` +
+      `/healthz`, `X-Broker-Key`-gated; pass-through (no OAuth/refresh), Codex
+      JWT-`exp` gate; 200/403/409 + refuse-without-key all curl-verified
 - [ ] **3a. Firmware data path** — TLS provider clients + on-device 14-key synthesis,
       **hardcoded** tokens; real usage renders (verify via `screenshot.sh`)
 - [ ] **3b. Firmware token plumbing** — `token_store` (NVS) + `/tokens` fetch +
@@ -123,10 +124,12 @@ the MCU.
 
 ## Constraint (user, 2026-06-04)
 
-**The daemon never performs OAuth refresh itself.** It only (a) reads the
-tokens already on the laptop (kept current by normal CLI use), and (b) when a
-token is stale, invokes the provider CLI to mint/refresh it. No `grant_type=
-refresh_token` HTTP exchange is implemented in the daemon.
+**The daemon never performs OAuth refresh, and never mints/refreshes tokens.**
+It only reads the tokens already on this host (kept current by normal Claude
+Code / Codex CLI use) and serves them, deciding usable-vs-needs-action. No
+`grant_type=refresh_token` exchange, no CLI subprocess. (An earlier draft had it
+shell to `codex exec` to refresh; that path is impossible — the binary refuses —
+so the broker is a pure pass-through.)
 
 ## Daemon design (token broker)
 
@@ -156,19 +159,23 @@ Per-provider behaviour — read local, CLI-assisted on staleness:
 | Local source | stored `setup-token` string (captured from the user's `claude setup-token` run) | `~/.codex/auth.json` → `tokens.access_token` + `tokens.account_id` |
 | Lifetime | ~1 year | ~10 days |
 | If valid | return it (`200`) | return it (`200`) |
-| If stale/expired | **cannot auto-mint** — `claude setup-token` is interactive-only (verified: no flags, opens OAuth browser flow) → `409` + `needs_action:"run claude setup-token"` | `codex login status`; if stale, `codex exec "ok"` forces a CLI refresh of `auth.json`, re-read and return `200`. If refresh fails (`rt_` dead, or `codex` errors) → `409` + `needs_action:"run codex login"` |
-| Refresh cost | 0 | one trivial model turn (~weekly) |
+| Expiry detectable? | No — opaque setup-token. Presence is the only gate; real expiry surfaces as the device's retry still 401-ing → device shows needs-action. | Yes — JWT `exp` decoded locally. |
+| If stale/expired | `409` + `needs_action:"run claude setup-token"` (only when the token is absent) | `409` + `needs_action:"run codex"` when `exp` is past (or within a 5-min margin) |
+| Refresh cost | 0 | 0 — no refresh; relies on normal `codex` use keeping `auth.json` current |
 
 Notes:
-- The broker does **not** implement OAuth — Codex refresh is delegated to the
-  Codex CLI subprocess; Claude re-mint is a manual yearly user action the broker
-  only signals via `409`.
-- Sync handlers fit the existing `ThreadingHTTPServer`/`BaseHTTPRequestHandler`;
-  the `httpx`/`asyncio` poll machinery is deleted, entrypoint becomes
-  `serve_forever()`.
-- The unit needs `claude` + `codex` on `PATH` (CLI invocation) and a path to the
-  stored Claude `setup-token` — see Config + install below; the `ExecStart`/venv
-  foot-gun from `CLAUDE.md` still applies.
+- Built as a **new** file `daemon/token_broker.py` (self-contained: stdlib
+  `http.server` only, no `httpx`/`asyncio`, no subprocess). The old
+  `claude_usage_daemon.py` is left running until the Phase-4 cutover repoints the
+  unit and deletes it — so the current device keeps working in the meantime. The
+  broker defaults to the same port `8080` (correct post-cutover, where the device
+  expects it); it is **not** run as a service until cutover, so there is no
+  simultaneous-bind conflict — test it on `CLAWDMETER_PORT=<other>`.
+- The broker does **not** implement OAuth or shell to any CLI. Claude re-mint is
+  a manual yearly user action it only signals via `409`.
+- The unit needs the Claude `setup-token` via `CLAUDE_CODE_OAUTH_TOKEN` or
+  `CLAWDMETER_CLAUDE_TOKEN_FILE`, and `CLAWDMETER_BROKER_KEY` — see Config +
+  install below; the `ExecStart`/venv foot-gun from `CLAUDE.md` still applies.
 
 ## Firmware design (coupled work)
 
@@ -206,8 +213,10 @@ a restructure up front.
 2. **Device first boot:** empty NVS → `GET /tokens` → cache and run. No
    per-device flashing step.
 3. **Steady state:** device polls providers directly; never needs the laptop.
-4. **Codex token dies (~weekly):** provider `401` → `GET /tokens`; broker
-   refreshes via the CLI and returns a fresh token. Laptop must be reachable then.
+4. **Codex token dies (~weekly):** provider `401` → `GET /tokens`. While you use
+   `codex` normally the ~10-day token stays fresh, so the broker just returns it;
+   if it has actually expired the broker returns `409` and you run codex once.
+   Laptop must be reachable when the device refetches.
 5. **Claude token dies (~yearly):** provider `401` → `GET /tokens` →
    `409`/needs-action (stored `setup-token` expired); user re-runs
    `claude setup-token`.
@@ -240,9 +249,13 @@ Claude/Codex quota.
    means a LAN sniffer still sees tokens in transit — the secret only stops
    casual other-device access, not passive capture. TLS-to-broker remains out of
    scope.
-3. **Codex refresh = auto `codex exec "ok"`.** On a stale token the broker shells
-   to the CLI to refresh `auth.json`, then serves it. Accept the ~weekly trivial
-   billable turn; falls back to `needs_action:"run codex login"` if `rt_` is dead.
+3. **Codex = pure pass-through, no refresh.** *(Revised 2026-06-04: `codex exec`
+   cannot refresh — the binary refuses, "auth token refresh is not supported in
+   exec mode"; `codex login status` doesn't refresh either. Refreshing in the
+   daemon was ruled out.)* The broker decodes the access-token JWT `exp` locally
+   (zero cost) and serves it while valid (~10-day token, kept fresh by normal
+   `codex` use); on expiry it returns `409`/needs-action and the user re-auths by
+   running codex. No subprocess, no billable turn.
 4. **Secret-at-rest = plain NVS.** No flash encryption / secure boot. Accepted
    risk: a flash dump yields spendable tokens (Claude's valid ~1 year);
    mitigated only by the user's willingness to re-provision / revoke.
@@ -251,9 +264,12 @@ Claude/Codex quota.
 
 - **Firmware** (`net_config.h` / `.example.h`): add `BROKER_KEY`; the existing
   daemon host/port are reused for the broker.
-- **Daemon**: `X-Broker-Key` value + path to the stored Claude `setup-token`
-  (env or config file). Update `install.sh` / `install-mac.sh` to prompt/store
-  both and to put `claude`+`codex` on the unit's `PATH`.
+- **Daemon** (env vars read by `token_broker.py`): `CLAWDMETER_BROKER_KEY`
+  (required — refuses to start without it) and the Claude setup-token via
+  `CLAUDE_CODE_OAUTH_TOKEN` or `CLAWDMETER_CLAUDE_TOKEN_FILE` (default
+  `~/.config/clawdmeter/claude_setup_token`). Codex is read straight from
+  `~/.codex/auth.json`. Phase 4 updates `install.sh` / `install-mac.sh` to
+  prompt/store the key + setup-token and to repoint the unit at `token_broker.py`.
 
 ## Implementation phases
 
@@ -272,18 +288,20 @@ Each unit is independently verifiable; don't merge them as one big-bang change.
    hosts; build RAM 14% / flash 34%. **For 3a's wire mapping:** Claude
    `unified-{5h,7d}-utilization` is a 0–1 fraction with **epoch** `-reset`;
    Codex `used_percent` is integer percent with **relative** `reset_after_seconds`.
-2. **Broker** *(no hardware)*. Swap the poller for `/tokens` + `/healthz` +
-   the `409`/needs-action paths, gated on `X-Broker-Key`. Verify end-to-end with
-   `curl` against the real laptop creds.
+2. **Broker** *(no hardware)*. **DONE** — new `daemon/token_broker.py` (kept
+   separate from the still-running poller until cutover); `/tokens` + `/healthz`,
+   `X-Broker-Key`-gated, pass-through with a Codex JWT-`exp` gate. 200/403/409 +
+   refuse-without-key curl-verified against real laptop creds.
 3. **Firmware** — split to de-risk:
    - 3a. TLS provider clients + on-device 14-key synthesis, with **hardcoded**
      tokens. Goal: real usage renders on screen (QA with `screenshot.sh`). Proves
      the data path before any token plumbing.
    - 3b. `token_store` (NVS) + `/tokens` fetch + the `401`-refetch / back-off /
      per-source health states.
-4. **Docs + lockstep cutover**. The doc sweep (below) plus the `/usage`→broker
-   switch. Single-device project, so this is one combined daemon + firmware
-   flash — no staged rollout, no need to keep `/usage` alive.
+4. **Docs + lockstep cutover**. Repoint the systemd unit `ExecStart` at
+   `token_broker.py`, delete `claude_usage_daemon.py`, plus the doc sweep (below).
+   Single-device project, so this is one combined daemon + firmware flash — no
+   staged rollout, no need to keep `/usage` alive.
 
 Ordering: 1 before 3 (gate); 2 before 3b; 4 last. 2 and 3a are independent and
 can run in parallel. Net: ~3 reviewable changes (broker; 3a; 3b + cutover) plus
