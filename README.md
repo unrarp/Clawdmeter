@@ -2,7 +2,7 @@
 
 A small ESP32 dashboard I made for my desk to keep an eye on my Claude Code (and Codex) usage at a glance.
 
-It runs on a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786) plus a few other boards (see [Hardware](#hardware)). The device connects to your WiFi network and pulls usage data from a small host daemon over plain HTTP. The daemon polls your Claude and Codex usage every 5 minutes and caches the result; the display fetches and renders it roughly every 45 seconds. The splash screen plays pixel-art Clawd animations that get busier as your usage rate climbs.
+It runs on a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786) plus a few other boards (see [Hardware](#hardware)). The device connects to your WiFi network and pulls usage data from a small host daemon over plain HTTP. The daemon polls your Claude and Codex usage every 5 minutes and caches the result; the display fetches and renders it roughly every 60 seconds. The splash screen plays pixel-art Clawd animations that get busier as your usage rate climbs.
 
 |              Usage meter              |              Clawd animation screen              |
 | :-----------------------------------: | :----------------------------------------------: |
@@ -54,7 +54,7 @@ Before flashing, copy `firmware/src/net_config.example.h` to `firmware/src/net_c
 #define WIFI_PASSWORD  "YourPassword"
 #define DAEMON_HOST    "my-macbook.local"   // your machine's mDNS hostname
 #define DAEMON_PORT    8080
-#define FETCH_INTERVAL_MS  45000
+#define FETCH_INTERVAL_MS  60000
 ```
 
 `DAEMON_HOST` is your machine's mDNS hostname (typically `<computer-name>.local`) — no static IP needed.
@@ -98,7 +98,7 @@ Before flashing, copy `firmware/src/net_config.example.h` to `firmware/src/net_c
 #define WIFI_PASSWORD  "YourPassword"
 #define DAEMON_HOST    "my-laptop.local"   // your machine's mDNS hostname
 #define DAEMON_PORT    8080
-#define FETCH_INTERVAL_MS  45000
+#define FETCH_INTERVAL_MS  60000
 ```
 
 `DAEMON_HOST` is your machine's mDNS hostname (typically `<computer-name>.local`) — no static IP needed.
@@ -131,7 +131,7 @@ View logs: `journalctl --user -u claude-usage-daemon -f`
 2. It polls each provider's read-only usage endpoint — Anthropic's `api.anthropic.com/api/oauth/usage` and OpenAI's Codex `chatgpt.com/backend-api/wham/usage` — every 5 minutes (both are rate-limited).
 3. The session/weekly percentages and reset times come straight out of those JSON responses. Each provider is independently optional — one you haven't set up just shows a "No account" screen rather than disappearing.
 4. The daemon caches the latest result and serves it as JSON over HTTP (`GET http://<host>:8080/usage`) on your local network.
-5. The firmware connects to your WiFi network, resolves the daemon host via mDNS (`<hostname>.local`), and fetches the payload roughly every 45 seconds.
+5. The firmware connects to your WiFi network, resolves the daemon host via mDNS (`<hostname>.local`), and fetches the payload roughly every 60 seconds.
 6. `parse_json()` maps the 14-key compact JSON to the `UsageData` struct and the LVGL dashboard repaints.
 7. The firmware also tracks the rate of change of session % over a 5-minute window and picks splash animations from the matching mood group.
 

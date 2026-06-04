@@ -150,7 +150,16 @@ static void check_serial_cmd() {
         char c = Serial.read();
         if (c == '\n' || c == '\r') {
             cmd_buf[cmd_pos] = '\0';
-            if (strcmp(cmd_buf, "screenshot") == 0) send_screenshot();
+            if (strcmp(cmd_buf, "screenshot") == 0) {
+                send_screenshot();
+            } else if (strncmp(cmd_buf, "brightness ", 11) == 0) {
+                // Debug knob for tuning DISPLAY_DEFAULT_BRIGHTNESS on the real
+                // panel (screenshots can't show panel brightness). Sets the
+                // level live; the idle ladder still overrides it on dim/wake.
+                int b = constrain(atoi(cmd_buf + 11), 0, 255);
+                display_hal_set_brightness((uint8_t)b);
+                Serial.printf("brightness=%d\n", b);
+            }
             cmd_pos = 0;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {
             cmd_buf[cmd_pos++] = c;
@@ -317,7 +326,10 @@ void loop() {
     if (net_has_data()) {
         UsageData fresh = {};
         if (parse_json(net_get_data(), &fresh)) {
-            if (usage_changed(usage, fresh)) idle_note_activity();  // real change = activity
+            // Any substantive provider-state change (usage %, ok, presence, or
+            // status) counts as activity → stay lit + powered. A continuously
+            // flapping provider would therefore hold the panel awake.
+            if (usage_changed(usage, fresh)) idle_note_activity();
             usage = fresh;
             int   g_before  = usage_rate_group();
             float max_pct   = max_present_session_pct(usage);

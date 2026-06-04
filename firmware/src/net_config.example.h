@@ -3,7 +3,7 @@
 #define WIFI_PASSWORD      "your-password"
 #define DAEMON_HOST        "my-laptop.local"     // mDNS <hostname>.local (incl. .local suffix), or a literal IP
 #define DAEMON_PORT        8080
-#define FETCH_INTERVAL_MS  45000
+#define FETCH_INTERVAL_MS  60000              // device → daemon poll cadence; daemon refreshes upstream every ~5 min regardless
 
 // Wall-clock time for the WiFi page's "Updated: HH:MM" line. The device has no
 // RTC, so it learns the time from NTP after WiFi associates (non-blocking SNTP).

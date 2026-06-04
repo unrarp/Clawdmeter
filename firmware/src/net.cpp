@@ -32,10 +32,11 @@ static char s_ip_buf[20];
 // Timestamp (millis()) of the last successful GET; 0 = never
 static uint32_t s_last_update_ms = 0;
 
-// Staleness window for the daemon-health verdict: ~2.7× the 45 s device fetch
-// interval (FETCH_INTERVAL_MS), so it trips only after ~3 missed fetches — not
-// on normal inter-fetch quiet.
-#define DAEMON_STALE_MS 120000UL
+// Staleness window for the daemon-health verdict: ~2.75× the device fetch
+// interval, so it trips only after ~3 missed fetches — not on normal
+// inter-fetch quiet. Derived from FETCH_INTERVAL_MS (net_config.h) so it can't
+// drift out of sync when the interval changes (e.g. 60 s -> 165 s here).
+#define DAEMON_STALE_MS ((uint32_t)FETCH_INTERVAL_MS * 11UL / 4UL)
 
 // Resolved daemon IP (cached after first mDNS lookup to avoid blocking tick)
 static IPAddress s_daemon_ip;
@@ -142,6 +143,12 @@ void net_init(void) {
 
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    // Deepest modem-sleep: this is a pull-only device (polls /usage every
+    // FETCH_INTERVAL_MS, no incoming traffic to wait on), so the radio can skip
+    // most DTIM beacons. A button-forced refresh still TXes immediately. Saves
+    // the largest single chunk of battery draw while displaying. See
+    // .claude/rules/networking.md.
+    WiFi.setSleep(WIFI_PS_MAX_MODEM);
     Serial.printf("[net] WiFi.begin(%s)\n", WIFI_SSID);
 }
 
