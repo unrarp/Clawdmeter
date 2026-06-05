@@ -46,6 +46,23 @@ If `pio` isn't on PATH: try `~/.platformio/penv/bin/pio` (Linux/macOS pio instal
 
 Device path differs by OS: `/dev/cu.usbmodem*` on macOS, `/dev/ttyACM0` on Linux. Both expose the ESP32-S3 native USB-JTAG (no boot-mode dance needed).
 
+**Identifying which board is plugged in — you can't, from the USB bus alone.**
+The two ESP32-S3 boards (1.8 and 2.16) enumerate as the *same* native USB-JTAG
+device (`303a:1001`, "USB JTAG/serial debug unit") — VID/PID/product are
+identical, so nothing in the descriptor distinguishes them. (The C6 uses HWCDC,
+not native USB-OTG, so it may enumerate differently.) Three ways that *do* work:
+
+- **Serial boot banner** — a *running* device self-reports: `main.cpp` prints
+  `Dashboard ready (<board name>, <W>x<H>)` (e.g. `Waveshare AMOLED 1.8, 368x448`).
+  The peripheral init lines above it are board-specific too (`XCA9554`+`FT3168` ⇒
+  1.8; `CST9220` ⇒ 2.16). Caveat: this only tells you what's *already flashed*, so
+  it can't pick the env for a board's first flash.
+- **USB serial = chip MAC** — `udevadm info -q property -n /dev/ttyACM0 | grep
+  ID_USB_SERIAL_SHORT` returns the MAC, unique per unit. Stable across reflashes,
+  so a known MAC can be mapped to a board to flash without prompting.
+- Flashing the wrong env is **not** a safe probe — a mismatched display/touch
+  driver just fails to bring up the panel; identify first, don't guess-and-flash.
+
 ## Lint / format
 
 One-time setup: **`make setup`** — creates a gitignored `.venv-dev/`, installs the

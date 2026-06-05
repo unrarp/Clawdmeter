@@ -80,3 +80,8 @@ but a **single-core RISC-V ESP32-C6, no PSRAM, BLE 5.3 only**, and an **SH8601**
   alone selects TinyUSB (absent on C6) and breaks the build.
 - Flash: 16 MB part needed (`default_16MB.csv`) — firmware (~1.43 MB) overflows the
   default 1.25 MB app partition.
+
+## Related decisions
+
+- `2026-06-03-axp-power-off-vs-deep-sleep` — why the AXP2101 PWRON power-off path
+  (not ESP32 deep sleep) drives the PWR button + battery auto-off.
