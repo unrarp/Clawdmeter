@@ -7,37 +7,37 @@ tags: [screen-cycle, ui, presence, provider, dynamic-hiding]
 # Static screen cycle with "No account" panel vs dynamic page-hiding
 
 ## Context
+Adding a second provider screen (Codex alongside Claude) raised the question:
+for a single-account user, hide the absent provider's page from the cycle, or
+keep it always present showing a placeholder? The initial plan called for
+dynamic hiding gated on presence flags.
 
-Adding a second provider screen (Codex alongside Claude) raised the question: when a user has only one account, should the absent provider's page be hidden from the cycle entirely, or always present but showing a placeholder?
-
-The initial plan spec called for dynamic hiding: `sp`/`cp` presence flags would gate whether `SCREEN_USAGE`/`SCREEN_CODEX` appeared in the cycle at all.
-
-## Decision / Solution
-
-Static screens: `Claude → Codex → WiFi` cycle (forward, repeating), with Splash toggled in/out separately via `ui_toggle_splash()`. An absent provider renders a "No account" panel (`ui_update_provider` with `present=false` shows `"--%"` and `"No Claude account"` / `"No OpenAI account"`). The cycle never changes; `ui_update_provider` handles all four states via a flat if/return chain.
+## Decision
+Static screens: `Claude → Codex → WiFi` (forward, repeating), Splash toggled in/out
+separately via `ui_toggle_splash()`. An absent provider renders a "No account"
+panel; the cycle never changes. `ui_update_provider` handles all four states via a
+flat if/return chain keyed on `ProviderUsage.present`.
 
 ## Why
+Dynamic hiding needs four interacting pieces — `screen_enabled()`, skip-disabled in
+`ui_cycle_screen`, redirect-on-show in `ui_show_screen`, and reconcile-on-payload
+(snap off a screen that just became disabled, guard `prev_non_splash_screen`). Each
+is simple alone, but together they form a web of edge cases (both providers absent;
+account removed mid-cycle; `prev_non_splash_screen` pointing at a now-disabled screen
+on a splash toggle). The static approach deletes all four — the only firmware change
+is a flat branch in `ui_update_provider`.
 
-Dynamic hiding requires four distinct pieces of machinery that interact:
-
-1. **`screen_enabled(screen)`** — a helper returning whether a given screen is in the cycle, driven by the latest `UsageData` presence flags.
-2. **Skip-disabled in `ui_cycle_screen`** — advance to the next *enabled* screen, skipping disabled ones.
-3. **Redirect-on-show in `ui_show_screen`** — if asked to show a disabled screen, redirect to the next enabled one.
-4. **Reconcile-on-payload** — when new data changes presence, if the *currently shown* screen just became disabled, snap to the next enabled screen; also guard `prev_non_splash_screen` to never point at a disabled screen.
-
-Each of these is individually simple, but together they form a web of edge cases: what if both providers are absent (only WiFi in the forward cycle, both provider screens show "No account")? What if the user is on the Codex screen and removes their account mid-cycle? What if `prev_non_splash_screen` points at a now-disabled screen on a click-to-toggle-splash action?
-
-The static approach deletes all four: the cycle is unconditional, the only firmware change is a flat branch in `ui_update_provider`, keyed on `ProviderUsage.present`. The decision still holds — it kept the absent-provider path a single dead-simple branch instead of four interacting state machines.
-
-> **Post-cutover note:** `present` was originally a daemon-emitted `sp`/`cp` wire flag that selected the "No account" text. After the token-broker cutover the device fetches each provider directly with no wire-JSON layer, and `present` is now **always `true`** — a provider needing re-auth surfaces via the WiFi-page health verdict, not a blanked panel. The `present=false` branch is therefore latent, kept for the absent-provider case the static design still supports.
+> **Post-cutover note:** `present` was originally a daemon `sp`/`cp` wire flag. After
+> the token-broker cutover the device fetches each provider directly with no wire-JSON
+> layer, and `present` is now **always `true`** — a provider needing re-auth surfaces
+> via the WiFi-page health verdict, not a blanked panel. The `present=false` branch is
+> latent, kept for the absent-provider case the static design still supports.
 
 ## Alternatives considered
-
-**Dynamic hiding** (initial plan): pages removed from the cycle when the provider's creds file is absent. Cleaner UX for single-account users (no extra page to click past), but the implementation complexity was the deciding factor against it. The machinery listed above was prototyped mentally; the reconcile-on-payload step alone has multiple edge cases.
-
-**Hybrid: hide only on first boot, show once account is added**: considered briefly and rejected — "first boot" is indistinguishable from "account recently removed" from the device's perspective, so this would require daemon-side persistent state.
+- **Dynamic hiding** (initial plan): cleaner UX for single-account users, but the
+  four-piece machinery above (esp. reconcile-on-payload) was the deciding cost.
+- **Hide on first boot only:** rejected — "first boot" is indistinguishable from
+  "account just removed" device-side, so it needs daemon-side persistent state.
 
 ## Related
-
-- `.claude/rules/ui.md` — standing rule to use static cycle.
-- `docs/plans/2026-06-02-codex-usage.md` §D.2 — full screen plumbing spec.
+- `.claude/rules/ui.md`; `docs/plans/2026-06-02-codex-usage.md` §D.2 (screen plumbing).

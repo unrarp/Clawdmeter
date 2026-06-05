@@ -4,99 +4,58 @@ module: daemon
 tags: [rate-limit, oauth, api-oauth-usage, poll-interval, backoff]
 ---
 
-> **Addendum (2026-06-04):** This is now a **historical / rejected-alternative
-> record** — nothing in the repo hits `/api/oauth/usage` anymore. The polling
-> daemon `daemon/claude_usage_daemon.py` described below was **deleted at the
-> token-broker cutover** (`284c496`); the device fetches usage directly and
-> scrapes the `anthropic-ratelimit-unified-*` response headers off a
-> `POST /v1/messages` (max_tokens:1) call, which has generous limits and no
-> known rate-limit problems. Kept because the empirical rate-limit evidence
-> below is what ruled `/api/oauth/usage` out — re-read it before anyone
-> reintroduces that endpoint. The sections below describe the deleted daemon in
-> the present tense as it stood at the time.
+> **Status: historical / rejected alternative (2026-06-04).** Nothing in the
+> repo hits `/api/oauth/usage` anymore — the polling daemon described below was
+> deleted at the token-broker cutover (`284c496`). The device now scrapes
+> `anthropic-ratelimit-unified-*` headers off a `POST /v1/messages`
+> (`max_tokens:1`) call, which has generous limits. Kept for the empirical
+> evidence that ruled the oauth endpoint out — re-read before anyone
+> reintroduces it.
 
-# `/api/oauth/usage` requires a ≥300s poll interval and a fail-backoff
+# `/api/oauth/usage` is rate-limited (~1 req/min) — rejected
 
 ## Context
 
-The daemon (`daemon/claude_usage_daemon.py`, a single cross-platform Python
-file) polls Anthropic for the user's session/weekly usage and serves it over
-HTTP; the ESP32 pulls `GET /usage` on its own cadence. The original approach
-(pre-commit `9ac470b`) made a throwaway `POST /v1/messages` (1-token Haiku
-call) and scraped rate-limit headers from the response. Upstream PR #29
-(BrianPugh, 2026-05-24) proposed switching to the purpose-built
-`GET /api/oauth/usage` endpoint, which returns structured JSON
-(`five_hour`/`seven_day` with `utilization` and `resets_at`) at no token
-cost. PR #29 was merged, then reverted in PR #37 (2026-05-24) after
-rate-limiting problems were observed in practice.
+Upstream PR #29 proposed switching usage polling from a 1-token
+`POST /v1/messages` header-scrape to the purpose-built `GET /api/oauth/usage`
+(structured JSON, no token cost). It merged, then reverted in PR #37 after
+rate-limiting showed up in practice. Our commit `9ac470b` made the same switch
+with a fixed 300s interval + 60s fail-backoff that upstream never landed.
 
-This project's commit `9ac470b` makes the same switch with a specific
-interval and backoff that upstream never landed.
+## Why it was rejected
 
-## Decision / Solution
-
-- Poll `GET https://api.anthropic.com/api/oauth/usage` at `POLL_INTERVAL=300`
-  seconds (5 minutes) fixed — not adaptive.
-- On a failed cycle (some provider present, none polled OK), schedule the next
-  poll at `now + POLL_FAIL_BACKOFF` (retry in 60s) rather than `now +
-  POLL_INTERVAL` (the full 300s) or spinning at TICK (5s) rate.
-- The inner loop wakes every `TICK=5s` for responsive shutdown; this is
-  separate from the poll cadence.
-
-Reference: `daemon/claude_usage_daemon.py` — `POLL_INTERVAL`, `POLL_FAIL_BACKOFF`,
-and the backoff reconciliation
-`next_poll_at = time.time() + (POLL_INTERVAL if cycle_ok else POLL_FAIL_BACKOFF)`.
-
-## Why
-
-The endpoint is rate-limited by Anthropic, empirically at roughly 1 req/min.
-Hitting it faster produces `429` (hard rate limit, with `retry-after`) or
-`529` (transient overload). In testing:
+The endpoint rate-limits at roughly 1 req/min; faster returns `429`
+(`retry-after`) or `529` (overload):
 
 | Cadence | Observed |
 |---|---|
-| ~1 req/min (7 calls rapid) | 200, 200, 529, 529, 429, 429, 429 |
-| 60s spacing (original daemon interval) | 200, 200, 529, 529 |
-| 300s spacing | two consecutive 200s; stable across 24h observation |
+| ~1 req/min (7 rapid) | 200, 200, 529, 529, 429, 429, 429 |
+| 60s spacing | 200, 200, 529, 529 |
+| 300s spacing | two 200s; stable across 24h |
 
-Without a fail-backoff, a single 429 would schedule the next poll at roughly
-`now` (or worse), so the inner 5s tick loop retries on the very next tick —
-the "5-second storm" that caused upstream to revert PR #29, where one failure
-self-perpetuates. `POLL_FAIL_BACKOFF` is what spaces the retries out to 60s.
-
-There is no device-initiated path that can bypass the poll timer. The device
-pulls the daemon's cached snapshot via `GET /usage` at whatever rate it likes;
-the daemon polls upstream strictly on its own `next_poll_at` schedule, so device
-behavior (boot, reconnect, manual refresh) cannot compound the upstream rate.
+Even exponential backoff to a 5-minute ceiling (BrianPugh, post-revert) still
+hit limits — suggesting the constraint is cumulative session history, not burst
+rate. A fixed 300s stays under the empirical limit from the first call. The
+fail-backoff was load-bearing: without it a single 429 let the 5s inner tick
+loop storm the endpoint — the "5-second storm" that caused the upstream revert.
 
 ## Alternatives considered
 
-- **60s fixed (upstream PR #29 and original daemon):** Too fast; hit
-  rate-limits within 2–4 consecutive polls in testing. Upstream PR #29 author
-  (BrianPugh) initially reported no issues at 60s, then found them in logs.
-  Reverted in PR #37.
-- **Exponential backoff up to 5 minutes:** BrianPugh tried this after the
-  revert. Per the PR thread, users still reported hitting limits even at the
-  5-minute ceiling. Suggests the issue is cumulative session history, not
-  just burst rate. Fixed 300s sidesteps the accumulation problem by staying
-  well under the empirical limit from the first call.
-- **`POST /v1/messages` header-scrape (old approach):** Generous rate limits
-  (not the rate-limited oauth endpoint), but burns one inference token per
-  poll, spoofs the `claude-code/2.1.5` User-Agent, and can't get ISO-8601
-  reset times — only Unix timestamps from response headers.
+- **60s fixed (PR #29, original daemon):** hit limits within 2–4 polls.
+- **Exponential backoff to 5min (PR #37 follow-up):** still hit limits at the
+  ceiling — cumulative-history problem, not burst.
+- **`POST /v1/messages` header-scrape (current approach):** generous limits, but
+  burns one token per poll, spoofs the `claude-code/*` UA, and yields only Unix
+  reset timestamps (no ISO-8601).
 
 ## Prevention
 
-- Do not lower `POLL_INTERVAL` below 300 without first verifying the rate
-  limit has been relaxed. The 429 `retry-after` header value (observed:
-  ~101s after a small burst) is a lower bound, not a safe cadence — it
-  reflects the burst penalty, not the sustained limit.
-- The fail-backoff is load-bearing: without it, any transient failure causes
-  the 5s inner loop to storm the endpoint until the next success.
+If anyone reintroduces `/api/oauth/usage`, do not poll below 300s without
+re-verifying the limit relaxed — the 429 `retry-after` (~101s observed) is the
+burst penalty, a lower bound, not a safe sustained cadence.
 
 ## Related
 
-- Upstream PR #29 (switch): https://github.com/HermannBjorgvin/Clawdmeter/pull/29
-- Upstream PR #37 (revert): https://github.com/HermannBjorgvin/Clawdmeter/pull/37
-- `CLAUDE.md` "Daemon / host side" — runtime behavior docs
-- `.claude/rules/daemon.md` — rule bullet
+- Upstream PR [#29](https://github.com/HermannBjorgvin/Clawdmeter/pull/29) /
+  [#37](https://github.com/HermannBjorgvin/Clawdmeter/pull/37)
+- `.claude/rules/daemon.md`

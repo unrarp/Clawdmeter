@@ -7,24 +7,35 @@ tags: [fonts, lvgl, lv_font_conv, bitmap-font, freetype, tiny_ttf, flash, psram,
 # Pre-baked bitmap fonts vs runtime TTF rasterization
 
 ## Context
-The UI ships 9 generated `font_*.c` files (Styrene ×6, Tiempos ×2, Mono ×1), ~1.2 MB of source. Fixing the cramped compact layout needed a new headline size, which meant *generating* `font_styrene_36.c` rather than scaling an existing font — raising the question of why each size needs its own file and whether the device could render `.otf`/`.ttf` directly.
+The UI ships 9 generated `font_*.c` files (~1.2 MB of source). Fixing the
+cramped compact layout needed a new headline size, which meant *generating*
+`font_styrene_36.c` rather than scaling an existing font — raising the question
+of why each size needs its own file and whether the device could rasterize
+`.otf`/`.ttf` at runtime instead.
 
-## Decision / Solution
-Keep pre-baked, per-size LVGL bitmap fonts (`lv_font_conv --format lvgl --bpp 4 --no-compress`, one `.c` per typeface+size; declared via `LV_FONT_DECLARE` in `firmware/src/fonts.h`, the single inventory included by `ui.cpp` + `splash.cpp`). Do not enable a runtime rasterizer.
+## Decision
+Keep pre-baked, per-size LVGL bitmap fonts (one `.c` per typeface+size, declared
+in `firmware/src/fonts.h`). Do not enable a runtime rasterizer.
 
 ## Why
-Bitmap fonts store rasterized glyphs, so size scales with px² (Styrene 12 = 41 KB → 48 = 230 KB → Tiempos 56 = 315 KB) and a 28px font cannot be derived from a 48px one — hence one file per size. They live in flash (`const`), cost zero RAM and zero CPU at render (straight blits), and render identically every boot.
-
-LVGL *does* support runtime TTF via FreeType and TinyTTF — a single `StyreneB-Regular.otf` (72 KB) + `TiemposText.otf` (91 KB) could replace all ~1.35 MB and render any size on demand. Both are disabled (`LV_USE_FREETYPE`/`LV_USE_TINY_TTF` off). The trade is deliberate: on the ESP32-S3, **flash is abundant** (firmware is ~20% of the 6.5 MB partition) but **RAM and CPU are scarce** — runtime rasterization needs a PSRAM glyph cache and per-glyph CPU. For a 3-screen dashboard with a fixed, known set of sizes, paying abundant flash for crisp, zero-cost glyphs is correct.
+Bitmap fonts store rasterized glyphs, so size scales with px² and a 28px font
+can't be derived from a 48px one — hence one file per size. They live in flash
+(`const`), cost zero RAM and zero CPU at render (straight blits), and look
+identical every boot. LVGL *can* rasterize at runtime (FreeType / TinyTTF, both
+disabled), collapsing all ~1.35 MB to two OTFs — but that needs a PSRAM glyph
+cache and per-glyph CPU. On the ESP32-S3 flash is abundant (firmware is ~20% of
+the 6.5 MB partition) while RAM/CPU are scarce, so for a 3-screen dashboard with
+a fixed set of sizes, paying flash for zero-cost glyphs is the right trade.
 
 ## Alternatives considered
-- **Runtime FreeType** — most capable, but the heaviest library plus a PSRAM cache; overkill for a static UI.
-- **Runtime TinyTTF** — lighter; the option to revisit *if* the size set ever needs to be dynamic or many typefaces are added. Would collapse the 12 files to ~2 OTFs, trading flash (abundant) for RAM/CPU (scarce).
+- **Runtime FreeType** — most capable, heaviest library + PSRAM cache; overkill.
+- **Runtime TinyTTF** — lighter; revisit only *if* the size set must become
+  dynamic or many typefaces are added.
 
 ## Prevention
-- Adding a size = generate a new `.c` (see `.claude/rules/fonts.md`), then update the README regen loop and the CLAUDE.md font inventory so a future regen doesn't drop it — both drifted before (the README loop was missing 36/16/14/12).
-- `lv_font_conv` ≥1.5.3 emits LVGL-9-clean output; the manual patch in CLAUDE.md "Critical gotchas" #4 applies only to pre-1.5.3 output.
+- Adding a size = generate a new `.c` (`.claude/rules/fonts.md`), then update the
+  README regen loop and the CLAUDE.md font inventory — both drifted before (the
+  README loop was missing 36/16/14/12).
 
 ## Related
-- `.claude/rules/fonts.md`
-- CLAUDE.md "Critical gotchas" #4 (LVGL 9 font patching)
+- `.claude/rules/fonts.md`; CLAUDE.md "Critical gotchas" #4 (LVGL 9 font patching).
