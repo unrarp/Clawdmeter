@@ -1,8 +1,10 @@
-#include "../../hal/imu_hal.h"
-#include "board.h"
 #include <Arduino.h>
 #include <Wire.h>
+
 #include <SensorQMI8658.hpp>
+
+#include "../../hal/imu_hal.h"
+#include "board.h"
 
 // QMI8658 is populated on the 2.16 carrier PCB but rotation is disabled
 // on the C6 build (BOARD_HAS_ROTATION=0). We still initialize the device
@@ -23,4 +25,6 @@ void imu_hal_tick(void) {
     // No-op — rotation is disabled.
 }
 
-uint8_t imu_hal_rotation_quadrant(void) { return 0; }
+uint8_t imu_hal_rotation_quadrant(void) {
+    return 0;
+}

@@ -163,8 +163,10 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
     if not BROKER_KEY:
-        log.error("CLAWDMETER_BROKER_KEY is not set — refusing to start "
-                  "(the broker vends spendable credentials).")
+        log.error(
+            "CLAWDMETER_BROKER_KEY is not set — refusing to start "
+            "(the broker vends spendable credentials)."
+        )
         sys.exit(1)
     log.info("=== Clawdmeter token broker ===")
     claude_src = "env" if os.environ.get(CLAUDE_TOKEN_ENV) else f"file {CLAUDE_TOKEN_FILE}"

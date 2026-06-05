@@ -1,7 +1,8 @@
-#include "../../hal/touch_hal.h"
-#include "board.h"
 #include <Arduino.h>
 #include <Wire.h>
+
+#include "../../hal/touch_hal.h"
+#include "board.h"
 
 // Minimal FT3168 reader (FocalTech standard register layout). Avoids
 // vendoring Waveshare's GPLv3 Arduino_DriveBus library.
@@ -9,8 +10,8 @@
 //   reg 0x03 / 0x04: X1 high (low nibble) + X1 low
 //   reg 0x05 / 0x06: Y1 high (low nibble) + Y1 low
 
-static volatile bool     touch_data_ready = false;
-static volatile bool     touch_pressed = false;
+static volatile bool touch_data_ready = false;
+static volatile bool touch_pressed = false;
 static volatile uint16_t touch_x = 0;
 static volatile uint16_t touch_y = 0;
 
@@ -21,8 +22,14 @@ static void IRAM_ATTR touch_isr(void) {
 static void ft3168_read_into_shared_state(void) {
     Wire.beginTransmission(FT3168_ADDR);
     Wire.write(0x02);
-    if (Wire.endTransmission(false) != 0) { touch_pressed = false; return; }
-    if (Wire.requestFrom(FT3168_ADDR, (uint8_t)5) != 5) { touch_pressed = false; return; }
+    if (Wire.endTransmission(false) != 0) {
+        touch_pressed = false;
+        return;
+    }
+    if (Wire.requestFrom(FT3168_ADDR, (uint8_t)5) != 5) {
+        touch_pressed = false;
+        return;
+    }
     uint8_t fingers = Wire.read() & 0x0F;
     uint8_t xH = Wire.read();
     uint8_t xL = Wire.read();

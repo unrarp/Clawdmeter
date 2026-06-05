@@ -1,10 +1,12 @@
 #include "ui.h"
-#include "splash.h"
+
 #include <lvgl.h>
 #include <time.h>
-#include "logos.h"
-#include "icons.h"
+
 #include "hal/board_caps.h"
+#include "icons.h"
+#include "logos.h"
+#include "splash.h"
 
 // Both provider marks must share geometry: row_center_y() centers the top row
 // against LOGO_CLAUDE_HEIGHT for the Claude *and* Codex screens.
@@ -23,10 +25,10 @@ struct Layout {
     int16_t scr_w, scr_h;
     int16_t margin;
     int16_t title_y;
-    int16_t logo_y;                // logo top; title + battery center against this row
+    int16_t logo_y;  // logo top; title + battery center against this row
     int16_t content_y;
     int16_t content_w;
-    const lv_font_t* title_font;   // shared by both screen titles
+    const lv_font_t* title_font;  // shared by both screen titles
 
     // Usage screen
     int16_t usage_panel_h;
@@ -70,28 +72,28 @@ static void compute_layout(const BoardCaps& c) {
     L.scr_h = c.height;
     L.margin = 20;
     L.title_y = 30;
-    L.logo_y = L.title_y - 10;   // logo top; the title/battery row centers against this
+    L.logo_y = L.title_y - 10;  // logo top; the title/battery row centers against this
 
     // Values shared by both breakpoints — kept out of the if/else so only the
     // genuinely size-dependent values differ between the two branches.
-    L.content_y        = 110;    // clears the 80px logo (bottom at logo_y + LOGO_CLAUDE_HEIGHT) with padding
-    L.usage_panel_gap  = 16;
-    L.usage_pill_font  = &font_styrene_28;
+    L.content_y = 110;  // clears the 80px logo (bottom at logo_y + LOGO_CLAUDE_HEIGHT) with padding
+    L.usage_panel_gap = 16;
+    L.usage_pill_font = &font_styrene_28;
     L.usage_reset_font = &font_styrene_28;
 
     if (c.height >= 460) {
         // Large layout — tuned for 480x480 (AMOLED-2.16).
-        L.title_font       = &font_tiempos_56;
+        L.title_font = &font_tiempos_56;
         L.usage_panel_h = 150;
         L.usage_bar_y = 56;
         L.usage_reset_y = 94;
-        L.usage_pct_font   = &font_styrene_48;
+        L.usage_pct_font = &font_styrene_48;
         // Panel extends down to just above the credit lines (≈396 bottom),
         // so the grey fills the screen like the usage page rather than
         // floating as a short box. It stops ~30px shy of where the usage
         // panels end because, unlike them, this screen has credits below.
         L.wifi_info_panel_h = 286;
-        L.wifi_icon_scale = 256;   // status icon at native 48px (LV_SCALE_NONE — no transform)
+        L.wifi_icon_scale = 256;  // status icon at native 48px (LV_SCALE_NONE — no transform)
         L.wifi_status_x = 56;
         L.wifi_status_y = 2;
         L.wifi_ssid_y = 68;
@@ -99,8 +101,8 @@ static void compute_layout(const BoardCaps& c) {
         L.wifi_prov_y[0] = 144;
         L.wifi_prov_y[1] = 182;
         L.wifi_age_y = 220;
-        L.wifi_status_font   = &font_styrene_48;
-        L.wifi_row_font   = &font_styrene_28;
+        L.wifi_status_font = &font_styrene_48;
+        L.wifi_row_font = &font_styrene_28;
         L.wifi_credit_1_font = &font_styrene_24;
         L.wifi_credit_2_font = &font_styrene_20;
     } else {
@@ -109,16 +111,17 @@ static void compute_layout(const BoardCaps& c) {
         // large layout; the title shrinks only because "WiFi" at 56px would
         // overrun the narrower (368px) width. Panel holds the status row +
         // five diagnostic rows (SSID, IP, Claude, Codex, age) + credits.
-        L.title_font       = &font_tiempos_34;
+        L.title_font = &font_tiempos_34;
         L.usage_panel_h = 134;
         L.usage_bar_y = 48;
-        L.usage_reset_y = 78;    // ends ~2px above the panel content bottom (clearance for descenders)
-        L.usage_pct_font   = &font_styrene_36;   // headline %, a step down from 48 so the row breathes
+        L.usage_reset_y =
+            78;  // ends ~2px above the panel content bottom (clearance for descenders)
+        L.usage_pct_font = &font_styrene_36;  // headline %, a step down from 48 so the row breathes
         // Extends to ≈368 bottom — just above the credit lines — so the grey
         // matches the usage page; stops short of the usage-panel bottom (394)
         // to leave room for the two credit lines this screen has below it.
         L.wifi_info_panel_h = 258;
-        L.wifi_icon_scale = 160;   // scale status icon 48px -> ~30px to match the 28px status text
+        L.wifi_icon_scale = 160;  // scale status icon 48px -> ~30px to match the 28px status text
         L.wifi_status_x = 44;
         L.wifi_status_y = 4;
         L.wifi_ssid_y = 56;
@@ -126,8 +129,8 @@ static void compute_layout(const BoardCaps& c) {
         L.wifi_prov_y[0] = 128;
         L.wifi_prov_y[1] = 164;
         L.wifi_age_y = 200;
-        L.wifi_status_font   = &font_styrene_28;
-        L.wifi_row_font   = &font_styrene_20;   // sub-lines; 24px overflowed the 296px inner width
+        L.wifi_status_font = &font_styrene_28;
+        L.wifi_row_font = &font_styrene_20;  // sub-lines; 24px overflowed the 296px inner width
         L.wifi_credit_1_font = &font_styrene_20;
         L.wifi_credit_2_font = &font_styrene_16;
     }
@@ -160,8 +163,14 @@ static int16_t row_center_y(int item_h) {
 struct ProviderWidgets {
     lv_obj_t* container;
     lv_obj_t* title;
-    lv_obj_t* pct_session;    lv_obj_t* label_session;  lv_obj_t* bar_session;  lv_obj_t* reset_session;
-    lv_obj_t* pct_weekly;     lv_obj_t* label_weekly;   lv_obj_t* bar_weekly;   lv_obj_t* reset_weekly;
+    lv_obj_t* pct_session;
+    lv_obj_t* label_session;
+    lv_obj_t* bar_session;
+    lv_obj_t* reset_session;
+    lv_obj_t* pct_weekly;
+    lv_obj_t* label_weekly;
+    lv_obj_t* bar_weekly;
+    lv_obj_t* reset_weekly;
     lv_obj_t* anim;
 };
 
@@ -191,13 +200,12 @@ static uint8_t anim_spinner_idx = 0;
 static uint8_t anim_phase = 0;
 static uint8_t anim_msg_idx = 0;
 static uint32_t anim_msg_start = 0;
-#define ANIM_MSG_MS     4000
+#define ANIM_MSG_MS 4000
 
 static const char* const spinner_frames[] = {
-    "\xC2\xB7", "\xE2\x9C\xBB", "\xE2\x9C\xBD",
-    "\xE2\x9C\xB6", "\xE2\x9C\xB3", "\xE2\x9C\xA2",
+    "\xC2\xB7", "\xE2\x9C\xBB", "\xE2\x9C\xBD", "\xE2\x9C\xB6", "\xE2\x9C\xB3", "\xE2\x9C\xA2",
 };
-#define SPINNER_COUNT 6
+#define SPINNER_COUNT  6
 #define SPINNER_PHASES (2 * (SPINNER_COUNT - 1))  // 10: ping-pong 0..5..0
 
 static const uint16_t spinner_ms[SPINNER_COUNT] = {
@@ -205,43 +213,102 @@ static const uint16_t spinner_ms[SPINNER_COUNT] = {
 };
 
 static const char* const anim_messages[] = {
-    "Accomplishing", "Elucidating", "Perusing",
-    "Actioning", "Enchanting", "Philosophising",
-    "Actualizing", "Envisioning", "Pondering",
-    "Baking", "Finagling", "Pontificating",
-    "Booping", "Flibbertigibbeting", "Processing",
-    "Brewing", "Forging", "Puttering",
-    "Calculating", "Forming", "Puzzling",
-    "Cerebrating", "Frolicking", "Reticulating",
-    "Channelling", "Generating", "Ruminating",
-    "Churning", "Germinating", "Scheming",
-    "Clauding", "Hatching", "Schlepping",
-    "Coalescing", "Herding", "Shimmying",
-    "Cogitating", "Honking", "Shucking",
-    "Combobulating", "Hustling", "Simmering",
-    "Computing", "Ideating", "Smooshing",
-    "Concocting", "Imagining", "Spelunking",
-    "Conjuring", "Incubating", "Spinning",
-    "Considering", "Inferring", "Stewing",
-    "Contemplating", "Jiving", "Sussing",
-    "Cooking", "Manifesting", "Synthesizing",
-    "Crafting", "Marinating", "Thinking",
-    "Creating", "Meandering", "Tinkering",
-    "Crunching", "Moseying", "Transmuting",
-    "Deciphering", "Mulling", "Unfurling",
-    "Deliberating", "Mustering", "Unravelling",
-    "Determining", "Musing", "Vibing",
-    "Discombobulating", "Noodling", "Wandering",
-    "Divining", "Percolating", "Whirring",
-    "Doing", "Wibbling",
-    "Effecting", "Wizarding",
-    "Working", "Wrangling",
+    "Accomplishing",
+    "Elucidating",
+    "Perusing",
+    "Actioning",
+    "Enchanting",
+    "Philosophising",
+    "Actualizing",
+    "Envisioning",
+    "Pondering",
+    "Baking",
+    "Finagling",
+    "Pontificating",
+    "Booping",
+    "Flibbertigibbeting",
+    "Processing",
+    "Brewing",
+    "Forging",
+    "Puttering",
+    "Calculating",
+    "Forming",
+    "Puzzling",
+    "Cerebrating",
+    "Frolicking",
+    "Reticulating",
+    "Channelling",
+    "Generating",
+    "Ruminating",
+    "Churning",
+    "Germinating",
+    "Scheming",
+    "Clauding",
+    "Hatching",
+    "Schlepping",
+    "Coalescing",
+    "Herding",
+    "Shimmying",
+    "Cogitating",
+    "Honking",
+    "Shucking",
+    "Combobulating",
+    "Hustling",
+    "Simmering",
+    "Computing",
+    "Ideating",
+    "Smooshing",
+    "Concocting",
+    "Imagining",
+    "Spelunking",
+    "Conjuring",
+    "Incubating",
+    "Spinning",
+    "Considering",
+    "Inferring",
+    "Stewing",
+    "Contemplating",
+    "Jiving",
+    "Sussing",
+    "Cooking",
+    "Manifesting",
+    "Synthesizing",
+    "Crafting",
+    "Marinating",
+    "Thinking",
+    "Creating",
+    "Meandering",
+    "Tinkering",
+    "Crunching",
+    "Moseying",
+    "Transmuting",
+    "Deciphering",
+    "Mulling",
+    "Unfurling",
+    "Deliberating",
+    "Mustering",
+    "Unravelling",
+    "Determining",
+    "Musing",
+    "Vibing",
+    "Discombobulating",
+    "Noodling",
+    "Wandering",
+    "Divining",
+    "Percolating",
+    "Whirring",
+    "Doing",
+    "Wibbling",
+    "Effecting",
+    "Wizarding",
+    "Working",
+    "Wrangling",
 };
 #define ANIM_MSG_COUNT (sizeof(anim_messages) / sizeof(anim_messages[0]))
 
 // Codex's TUI has no whimsical catalog — its status header is just "Working"
 // (default) / "Thinking" (reasoning). Mirror that on the Codex screen.
-static const char* const codex_messages[] = { "Working", "Thinking" };
+static const char* const codex_messages[] = {"Working", "Thinking"};
 #define CODEX_MSG_COUNT (sizeof(codex_messages) / sizeof(codex_messages[0]))
 
 // Per-provider UI descriptor, indexed by PROV_* (data.h). The one place a new
@@ -249,27 +316,31 @@ static const char* const codex_messages[] = { "Working", "Thinking" };
 // caption, and the spinner-message catalog. Add a row here + a data.h enum entry
 // and the screens, logos, wifi rows, and animation all follow automatically.
 struct UiProvider {
-    const char* name;                  // screen title + WiFi-page row label
-    const uint8_t* logo_data;          // RGB565A8 mark (see logos.h)
+    const char* name;          // screen title + WiFi-page row label
+    const uint8_t* logo_data;  // RGB565A8 mark (see logos.h)
     int16_t logo_w, logo_h;
-    lv_color_t accent;                 // spinner color
-    const char* absent_msg;            // placeholder when present == false
-    const char* const* anim_msgs;      // spinner-message catalog
+    lv_color_t accent;             // spinner color
+    const char* absent_msg;        // placeholder when present == false
+    const char* const* anim_msgs;  // spinner-message catalog
     size_t anim_count;
 };
 static const UiProvider UI_PROVIDERS[PROVIDER_COUNT] = {
-    { "Claude", logo_claude_data, LOGO_CLAUDE_WIDTH, LOGO_CLAUDE_HEIGHT,
-      COL_ACCENT, "No Claude account", anim_messages, ANIM_MSG_COUNT },
-    { "Codex", logo_openai_data, LOGO_OPENAI_WIDTH, LOGO_OPENAI_HEIGHT,
-      COL_ACCENT_CODEX, "No OpenAI account", codex_messages, CODEX_MSG_COUNT },
+    {"Claude", logo_claude_data, LOGO_CLAUDE_WIDTH, LOGO_CLAUDE_HEIGHT, COL_ACCENT,
+     "No Claude account", anim_messages, ANIM_MSG_COUNT},
+    {"Codex", logo_openai_data, LOGO_OPENAI_WIDTH, LOGO_OPENAI_HEIGHT, COL_ACCENT_CODEX,
+     "No OpenAI account", codex_messages, CODEX_MSG_COUNT},
 };
 
 // Splash, then a contiguous range of provider screens, then WiFi (see ui.h).
 static inline bool is_provider_screen(screen_t s) {
-    return s >= SCREEN_PROVIDER_BASE && s < (screen_t)(SCREEN_PROVIDER_BASE + PROVIDER_COUNT);
+    return s >= SCREEN_PROVIDER_BASE && s < SCREEN_WIFI;
 }
-static inline int      provider_of(screen_t s)      { return (int)s - SCREEN_PROVIDER_BASE; }
-static inline screen_t screen_for_provider(int i)   { return (screen_t)(SCREEN_PROVIDER_BASE + i); }
+static inline int provider_of(screen_t s) {
+    return (int)s - SCREEN_PROVIDER_BASE;
+}
+static inline screen_t screen_for_provider(int i) {
+    return (screen_t)(SCREEN_PROVIDER_BASE + i);
+}
 
 static lv_color_t pct_color(float pct) {
     if (pct >= 80.0f) return COL_RED;
@@ -342,8 +413,8 @@ static lv_obj_t* make_bar(lv_obj_t* parent, int x, int y, int w, int h) {
 // Contract: only RGB565 and RGB565A8 are supported — any other cf is treated
 // as 2 B/px and would produce a wrong data_size. All call sites pass one of
 // these two constants.
-static void init_icon_dsc(lv_image_dsc_t* dsc, int w, int h,
-                          const void* data, lv_color_format_t cf) {
+static void init_icon_dsc(lv_image_dsc_t* dsc, int w, int h, const void* data,
+                          lv_color_format_t cf) {
     dsc->header.w = w;
     dsc->header.h = h;
     dsc->header.cf = cf;
@@ -370,25 +441,28 @@ static lv_obj_t* make_pill(lv_obj_t* parent, const char* text, const lv_font_t* 
 // Order must match the index logic in ui_update_battery(): empty, low, medium,
 // full, charging. All RGB565A8 so the alpha plane blends over the splash art.
 static void init_battery_icons(void) {
-    static const struct { uint16_t w, h; const uint8_t* data; } icons[] = {
-        { ICON_BATTERY_W,          ICON_BATTERY_H,          icon_battery_data },
-        { ICON_BATTERY_LOW_W,      ICON_BATTERY_LOW_H,      icon_battery_low_data },
-        { ICON_BATTERY_MEDIUM_W,   ICON_BATTERY_MEDIUM_H,   icon_battery_medium_data },
-        { ICON_BATTERY_FULL_W,     ICON_BATTERY_FULL_H,     icon_battery_full_data },
-        { ICON_BATTERY_CHARGING_W, ICON_BATTERY_CHARGING_H, icon_battery_charging_data },
+    static const struct {
+        uint16_t w, h;
+        const uint8_t* data;
+    } icons[] = {
+        {ICON_BATTERY_W, ICON_BATTERY_H, icon_battery_data},
+        {ICON_BATTERY_LOW_W, ICON_BATTERY_LOW_H, icon_battery_low_data},
+        {ICON_BATTERY_MEDIUM_W, ICON_BATTERY_MEDIUM_H, icon_battery_medium_data},
+        {ICON_BATTERY_FULL_W, ICON_BATTERY_FULL_H, icon_battery_full_data},
+        {ICON_BATTERY_CHARGING_W, ICON_BATTERY_CHARGING_H, icon_battery_charging_data},
     };
-    static_assert(sizeof(icons) / sizeof(icons[0]) == sizeof(battery_dscs) / sizeof(battery_dscs[0]),
-                  "battery_dscs and the icon table must stay in sync");
+    static_assert(
+        sizeof(icons) / sizeof(icons[0]) == sizeof(battery_dscs) / sizeof(battery_dscs[0]),
+        "battery_dscs and the icon table must stay in sync");
     for (size_t i = 0; i < sizeof(icons) / sizeof(icons[0]); i++)
-        init_icon_dsc(&battery_dscs[i], icons[i].w, icons[i].h,
-                      icons[i].data, LV_COLOR_FORMAT_RGB565A8);
+        init_icon_dsc(&battery_dscs[i], icons[i].w, icons[i].h, icons[i].data,
+                      LV_COLOR_FORMAT_RGB565A8);
 }
 
 // ======== Usage Screen ========
 
-static void make_usage_panel(lv_obj_t* parent, int y, const char* pill_text,
-                             lv_obj_t** out_pct, lv_obj_t** out_pill,
-                             lv_obj_t** out_bar, lv_obj_t** out_reset) {
+static void make_usage_panel(lv_obj_t* parent, int y, const char* pill_text, lv_obj_t** out_pct,
+                             lv_obj_t** out_pill, lv_obj_t** out_bar, lv_obj_t** out_reset) {
     lv_obj_t* panel = make_panel(parent, L.margin, y, L.content_w, L.usage_panel_h);
 
     *out_pct = lv_label_create(panel);
@@ -409,7 +483,8 @@ static void make_usage_panel(lv_obj_t* parent, int y, const char* pill_text,
     lv_obj_set_pos(*out_reset, 0, L.usage_reset_y);
 }
 
-static void init_provider_screen(lv_obj_t* scr, const char* title, lv_color_t accent, ProviderWidgets* w) {
+static void init_provider_screen(lv_obj_t* scr, const char* title, lv_color_t accent,
+                                 ProviderWidgets* w) {
     w->container = lv_obj_create(scr);
     lv_obj_set_size(w->container, L.scr_w, L.scr_h);
     lv_obj_set_pos(w->container, 0, 0);
@@ -421,13 +496,10 @@ static void init_provider_screen(lv_obj_t* scr, const char* title, lv_color_t ac
 
     w->title = make_title(w->container, title);
 
-    make_usage_panel(w->container, L.content_y, "Current",
-                     &w->pct_session, &w->label_session,
+    make_usage_panel(w->container, L.content_y, "Current", &w->pct_session, &w->label_session,
                      &w->bar_session, &w->reset_session);
-    make_usage_panel(w->container,
-                     L.content_y + L.usage_panel_h + L.usage_panel_gap, "Weekly",
-                     &w->pct_weekly, &w->label_weekly,
-                     &w->bar_weekly, &w->reset_weekly);
+    make_usage_panel(w->container, L.content_y + L.usage_panel_h + L.usage_panel_gap, "Weekly",
+                     &w->pct_weekly, &w->label_weekly, &w->bar_weekly, &w->reset_weekly);
 
     w->anim = lv_label_create(w->container);
     lv_label_set_text(w->anim, "");
@@ -450,8 +522,8 @@ static void init_wifi_screen(lv_obj_t* scr) {
 
     make_title(wifi_container, "WiFi");
 
-    lv_obj_t* p_info = make_panel(wifi_container, L.margin, L.content_y,
-                                  L.content_w, L.wifi_info_panel_h);
+    lv_obj_t* p_info =
+        make_panel(wifi_container, L.margin, L.content_y, L.content_w, L.wifi_info_panel_h);
 
     static lv_image_dsc_t icon_wifi_dsc;
     init_icon_dsc(&icon_wifi_dsc, ICON_WIFI_W, ICON_WIFI_H, icon_wifi_data, LV_COLOR_FORMAT_RGB565);
@@ -462,7 +534,7 @@ static void init_wifi_screen(lv_obj_t* scr) {
     // the call at native size avoids LVGL's per-redraw transform path on the
     // large layout; the compact layout pays it by design to match the 28px text.
     if (L.wifi_icon_scale != LV_SCALE_NONE) {
-        lv_image_set_pivot(wifi_img, 0, 0);        // scale toward top-left so pos stays predictable
+        lv_image_set_pivot(wifi_img, 0, 0);  // scale toward top-left so pos stays predictable
         lv_image_set_scale(wifi_img, L.wifi_icon_scale);
     }
     lv_obj_set_pos(wifi_img, 0, L.wifi_status_y);
@@ -563,8 +635,8 @@ static void set_window_placeholder(lv_obj_t* pct, lv_obj_t* bar, lv_obj_t* reset
 
 // Render one usage window with a live percentage + reset countdown. reset_color
 // is COL_DIM when fresh, COL_STALE when the data is stale.
-static void set_window_value(lv_obj_t* pct, lv_obj_t* bar, lv_obj_t* reset,
-                             float pct_val, int reset_mins, lv_color_t reset_color) {
+static void set_window_value(lv_obj_t* pct, lv_obj_t* bar, lv_obj_t* reset, float pct_val,
+                             int reset_mins, lv_color_t reset_color) {
     char buf[48];
     int p = (int)(pct_val + 0.5f);
     lv_label_set_text_fmt(pct, "%d%%", p);
@@ -576,32 +648,31 @@ static void set_window_value(lv_obj_t* pct, lv_obj_t* bar, lv_obj_t* reset,
     lv_obj_set_style_text_color(reset, reset_color, 0);
 }
 
-static void ui_update_provider(ProviderWidgets* w,
-                               float session_pct, int session_reset,
-                               float weekly_pct,  int weekly_reset,
-                               bool present, bool ok, const char* absent_msg) {
+static void ui_update_provider(ProviderWidgets* w, float session_pct, int session_reset,
+                               float weekly_pct, int weekly_reset, bool present, bool ok,
+                               const char* absent_msg) {
     if (!present) {
         // Provider not subscribed — placeholder in both windows.
         set_window_placeholder(w->pct_session, w->bar_session, w->reset_session, absent_msg);
-        set_window_placeholder(w->pct_weekly,  w->bar_weekly,  w->reset_weekly,  absent_msg);
+        set_window_placeholder(w->pct_weekly, w->bar_weekly, w->reset_weekly, absent_msg);
         return;
     }
     if (session_pct < 0) {
         // Present but never polled successfully yet — connecting.
         set_window_placeholder(w->pct_session, w->bar_session, w->reset_session, "Connecting...");
-        set_window_placeholder(w->pct_weekly,  w->bar_weekly,  w->reset_weekly,  "Connecting...");
+        set_window_placeholder(w->pct_weekly, w->bar_weekly, w->reset_weekly, "Connecting...");
         return;
     }
 
     lv_color_t reset_color = ok ? COL_DIM : COL_STALE;
-    set_window_value(w->pct_session, w->bar_session, w->reset_session,
-                     session_pct, session_reset, reset_color);
+    set_window_value(w->pct_session, w->bar_session, w->reset_session, session_pct, session_reset,
+                     reset_color);
     if (weekly_pct < 0) {
         // Defensive: session has data but weekly is the -1 sentinel.
         set_window_placeholder(w->pct_weekly, w->bar_weekly, w->reset_weekly, "Connecting...");
     } else {
-        set_window_value(w->pct_weekly, w->bar_weekly, w->reset_weekly,
-                         weekly_pct, weekly_reset, reset_color);
+        set_window_value(w->pct_weekly, w->bar_weekly, w->reset_weekly, weekly_pct, weekly_reset,
+                         reset_color);
     }
 }
 
@@ -609,9 +680,8 @@ void ui_update(const UsageData* data) {
     if (!data->valid) return;
     for (int i = 0; i < PROVIDER_COUNT; i++) {
         const ProviderUsage& p = data->providers[i];
-        ui_update_provider(&screens[i], p.session_pct, p.session_reset_mins,
-                           p.weekly_pct, p.weekly_reset_mins, p.present, p.ok,
-                           UI_PROVIDERS[i].absent_msg);
+        ui_update_provider(&screens[i], p.session_pct, p.session_reset_mins, p.weekly_pct,
+                           p.weekly_reset_mins, p.present, p.ok, UI_PROVIDERS[i].absent_msg);
     }
 }
 
@@ -631,12 +701,11 @@ void ui_tick_anim(void) {
     if (now - anim_last_ms >= spinner_ms[anim_spinner_idx]) {
         anim_last_ms = now;
         anim_phase = (anim_phase + 1) % SPINNER_PHASES;
-        anim_spinner_idx = (anim_phase < SPINNER_COUNT) ? anim_phase
-                                                        : (SPINNER_PHASES - anim_phase);
+        anim_spinner_idx =
+            (anim_phase < SPINNER_COUNT) ? anim_phase : (SPINNER_PHASES - anim_phase);
 
         static char buf[80];
-        snprintf(buf, sizeof(buf), "%s %s\xE2\x80\xA6",
-                 spinner_frames[anim_spinner_idx],
+        snprintf(buf, sizeof(buf), "%s %s\xE2\x80\xA6", spinner_frames[anim_spinner_idx],
                  msgs[anim_msg_idx % msg_count]);
         lv_label_set_text(screens[prov].anim, buf);
     }
@@ -645,14 +714,18 @@ void ui_tick_anim(void) {
 static screen_t prev_non_splash_screen = SCREEN_PROVIDER_BASE;
 static void apply_battery_visibility(void) {
     if (!battery_img) return;
-    if (current_screen == SCREEN_SPLASH) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
-    else                                  lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
+    if (current_screen == SCREEN_SPLASH)
+        lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
+    else
+        lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void global_click_cb(lv_event_t* e) {
     (void)e;
-    if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_non_splash_screen);
-    else                                  ui_show_screen(SCREEN_SPLASH);
+    if (current_screen == SCREEN_SPLASH)
+        ui_show_screen(prev_non_splash_screen);
+    else
+        ui_show_screen(SCREEN_SPLASH);
 }
 
 void ui_show_screen(screen_t screen) {
@@ -661,9 +734,12 @@ void ui_show_screen(screen_t screen) {
     lv_obj_add_flag(wifi_container, LV_OBJ_FLAG_HIDDEN);
     splash_hide();
 
-    if (screen == SCREEN_SPLASH)            splash_show();
-    else if (screen == SCREEN_WIFI)         lv_obj_clear_flag(wifi_container, LV_OBJ_FLAG_HIDDEN);
-    else if (is_provider_screen(screen))    lv_obj_clear_flag(screens[provider_of(screen)].container, LV_OBJ_FLAG_HIDDEN);
+    if (screen == SCREEN_SPLASH)
+        splash_show();
+    else if (screen == SCREEN_WIFI)
+        lv_obj_clear_flag(wifi_container, LV_OBJ_FLAG_HIDDEN);
+    else if (is_provider_screen(screen))
+        lv_obj_clear_flag(screens[provider_of(screen)].container, LV_OBJ_FLAG_HIDDEN);
 
     if (logo_img) {
         if (screen == SCREEN_SPLASH) {
@@ -696,8 +772,10 @@ void ui_cycle_screen(void) {
 }
 
 void ui_toggle_splash(void) {
-    if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_non_splash_screen);
-    else                                  ui_show_screen(SCREEN_SPLASH);
+    if (current_screen == SCREEN_SPLASH)
+        ui_show_screen(prev_non_splash_screen);
+    else
+        ui_show_screen(SCREEN_SPLASH);
 }
 
 screen_t ui_get_current_screen(void) {
@@ -713,15 +791,36 @@ screen_t ui_get_current_screen(void) {
 // "..." not U+2026 — the 20px row font has no ellipsis glyph.
 static void set_wifi_provider_row(lv_obj_t* lbl, const char* name, usage_health_t h) {
     const char* body = "---";
-    lv_color_t  col  = COL_DIM;
+    lv_color_t col = COL_DIM;
     switch (h) {
-    case USAGE_OFFLINE:      body = "---";               col = COL_DIM;   break;
-    case USAGE_NEEDS_ACTION: body = "needs login";       col = COL_RED;   break;
-    case USAGE_BROKER_DOWN:  body = "broker down";       col = COL_RED;   break;
-    case USAGE_NO_TOKEN:     body = "getting tokens..."; col = COL_AMBER; break;
-    case USAGE_NO_DATA:      body = "no data";           col = COL_RED;   break;
-    case USAGE_LIVE:         body = "live";              col = COL_GREEN; break;
-    case USAGE_STALE:        body = "stale";             col = COL_AMBER; break;
+        case USAGE_OFFLINE:
+            body = "---";
+            col = COL_DIM;
+            break;
+        case USAGE_NEEDS_ACTION:
+            body = "needs login";
+            col = COL_RED;
+            break;
+        case USAGE_BROKER_DOWN:
+            body = "broker down";
+            col = COL_RED;
+            break;
+        case USAGE_NO_TOKEN:
+            body = "getting tokens...";
+            col = COL_AMBER;
+            break;
+        case USAGE_NO_DATA:
+            body = "no data";
+            col = COL_RED;
+            break;
+        case USAGE_LIVE:
+            body = "live";
+            col = COL_GREEN;
+            break;
+        case USAGE_STALE:
+            body = "stale";
+            col = COL_AMBER;
+            break;
     }
     lv_label_set_text_fmt(lbl, "%s: %s", name, body);
     lv_obj_set_style_text_color(lbl, col, 0);
@@ -731,23 +830,23 @@ void ui_update_wifi_status(net_state_t state, const char* ssid, const char* ip,
                            uint32_t last_update_ms, const usage_health_t* health) {
     // Status label + color
     switch (state) {
-    case NET_ONLINE:
-        lv_label_set_text(lbl_wifi_status, "Connected");
-        lv_obj_set_style_text_color(lbl_wifi_status, COL_GREEN, 0);
-        break;
-    case NET_CONNECTING:
-        lv_label_set_text(lbl_wifi_status, "Connecting\xe2\x80\xa6");
-        lv_obj_set_style_text_color(lbl_wifi_status, COL_AMBER, 0);
-        break;
-    case NET_DISCONNECTED:
-    default:
-        lv_label_set_text(lbl_wifi_status, "Offline");
-        lv_obj_set_style_text_color(lbl_wifi_status, COL_RED, 0);
-        break;
+        case NET_ONLINE:
+            lv_label_set_text(lbl_wifi_status, "Connected");
+            lv_obj_set_style_text_color(lbl_wifi_status, COL_GREEN, 0);
+            break;
+        case NET_CONNECTING:
+            lv_label_set_text(lbl_wifi_status, "Connecting\xe2\x80\xa6");
+            lv_obj_set_style_text_color(lbl_wifi_status, COL_AMBER, 0);
+            break;
+        case NET_DISCONNECTED:
+        default:
+            lv_label_set_text(lbl_wifi_status, "Offline");
+            lv_obj_set_style_text_color(lbl_wifi_status, COL_RED, 0);
+            break;
     }
 
     lv_label_set_text_fmt(lbl_wifi_ssid, "SSID: %s", (ssid && *ssid) ? ssid : "---");
-    lv_label_set_text_fmt(lbl_wifi_ip,   "IP: %s",   (ip && *ip) ? ip : "---");
+    lv_label_set_text_fmt(lbl_wifi_ip, "IP: %s", (ip && *ip) ? ip : "---");
 
     for (int i = 0; i < PROVIDER_COUNT; i++)
         set_wifi_provider_row(lbl_wifi_prov[i], UI_PROVIDERS[i].name, health[i]);

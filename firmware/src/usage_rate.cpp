@@ -1,4 +1,5 @@
 #include "usage_rate.h"
+
 #include <Arduino.h>
 
 // Thresholds in %/min. A 5-hour (300 min) session ÷ 100% = 0.33 %/min to fill
@@ -8,9 +9,9 @@
 //   < 0.20  →  Normal  (8–17h to fill, slow steady use)
 //   < 0.33  →  Active  (5–8h, heavy but not yet pace-matching)
 //   >=0.33  →  Heavy   (≤5h, matching or beating the session reset)
-#define RATE_THRESH_NORMAL  0.10f
-#define RATE_THRESH_ACTIVE  0.20f
-#define RATE_THRESH_HEAVY   0.33f
+#define RATE_THRESH_NORMAL 0.10f
+#define RATE_THRESH_ACTIVE 0.20f
+#define RATE_THRESH_HEAVY  0.33f
 
 // Minimum span between oldest and newest sample before we trust the computed
 // rate. The whole point of the ring buffer is to smooth out single-sample
@@ -19,15 +20,18 @@
 // minute. We require ~4 min of accumulated history so the rate reflects a
 // real trend, not one noisy delta. Side-effect: ~4 min warm-up after boot
 // during which we report Idle.
-#define MIN_WINDOW_MS       240000UL
+#define MIN_WINDOW_MS 240000UL
 
 #define RING_SIZE 6
 
-struct Sample { uint32_t ms; float pct; };
+struct Sample {
+    uint32_t ms;
+    float pct;
+};
 
 static Sample ring[RING_SIZE];
 static uint8_t count = 0;
-static uint8_t head  = 0;  // index of next write slot
+static uint8_t head = 0;  // index of next write slot
 
 static inline uint8_t oldest_idx(void) {
     return (head + RING_SIZE - count) % RING_SIZE;
@@ -35,7 +39,7 @@ static inline uint8_t oldest_idx(void) {
 
 static void usage_rate_reset(void) {
     count = 0;
-    head  = 0;
+    head = 0;
 }
 
 void usage_rate_sample(float session_pct) {
@@ -49,7 +53,7 @@ void usage_rate_sample(float session_pct) {
         }
     }
 
-    ring[head] = { now, session_pct };
+    ring[head] = {now, session_pct};
     head = (head + 1) % RING_SIZE;
     if (count < RING_SIZE) count++;
 }
@@ -68,6 +72,6 @@ int usage_rate_group(void) {
 
     if (rate < RATE_THRESH_NORMAL) return 0;
     if (rate < RATE_THRESH_ACTIVE) return 1;
-    if (rate < RATE_THRESH_HEAVY)  return 2;
+    if (rate < RATE_THRESH_HEAVY) return 2;
     return 3;
 }

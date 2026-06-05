@@ -1,11 +1,13 @@
 #include "net.h"
-#include "net_config.h"
-#include "data.h"
-#include "token_store.h"
+
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
-#include <HTTPClient.h>
-#include <ArduinoJson.h>
+
+#include "data.h"
+#include "net_config.h"
+#include "token_store.h"
 
 // NTP defaults — fall back if an older net_config.h (gitignored) predates these
 // keys, so the build doesn't break on a stale config. Real values belong in
@@ -26,11 +28,11 @@
 // validate TLS to api.anthropic.com and chatgpt.com. Two-arg setCACertBundle on
 // this core; symbols verified in firmware/tools/tls_spike (Phase 1 gate).
 extern const uint8_t x509_crt_bundle_start[] asm("_binary_x509_crt_bundle_start");
-extern const uint8_t x509_crt_bundle_end[]   asm("_binary_x509_crt_bundle_end");
+extern const uint8_t x509_crt_bundle_end[] asm("_binary_x509_crt_bundle_end");
 
 // Provider endpoints (device-direct).
-#define ANTHROPIC_URL "https://api.anthropic.com/v1/messages"
-#define CODEX_URL     "https://chatgpt.com/backend-api/wham/usage"
+#define ANTHROPIC_URL        "https://api.anthropic.com/v1/messages"
+#define CODEX_URL            "https://chatgpt.com/backend-api/wham/usage"
 #define HTTP_CONNECT_TIMEOUT 6000  // TCP SYN-ACK cap (ms)
 #define HTTP_READ_TIMEOUT    6000  // response-read cap (ms) — pair with connect
 
@@ -68,45 +70,53 @@ static UsageData s_pub;
 // Buffers are sized per provider — Codex's access_token is a ~2 KB JWT, Claude's
 // is ~256 B — and reached through the Cred table so the fetch/token code is
 // index-driven. account is nullptr/0 for providers without an account id.
-struct Cred { char* token; size_t token_cap; char* account; size_t account_cap; };
+struct Cred {
+    char* token;
+    size_t token_cap;
+    char* account;
+    size_t account_cap;
+};
 static char s_claude_token[256];
 static char s_codex_token[2400];
 static char s_codex_account[64];
 static Cred s_cred[PROVIDER_COUNT] = {
-    { s_claude_token, sizeof(s_claude_token), nullptr,         0                       },
-    { s_codex_token,  sizeof(s_codex_token),  s_codex_account, sizeof(s_codex_account) },
+    {s_claude_token, sizeof(s_claude_token), nullptr, 0},
+    {s_codex_token, sizeof(s_codex_token), s_codex_account, sizeof(s_codex_account)},
 };
 
 // Per-provider token lifecycle. need_fetch drives a broker /tokens round-trip.
 enum TokenState { TOK_MISSING, TOK_OK, TOK_NEEDS_ACTION };
 static TokenState s_tok[PROVIDER_COUNT];
-static bool       s_need_fetch[PROVIDER_COUNT];
+static bool s_need_fetch[PROVIDER_COUNT];
 
 // Per-provider fetch scheduling. One blocking TLS call per tick (round-robin in
 // provider-index order), so two providers never chain two handshakes in a single
 // loop iteration. force[] refetches a provider on its next due tick regardless
 // of the interval (armed on (re)association and on a freshly fetched token).
 static uint32_t s_last_fetch[PROVIDER_COUNT] = {0};
-static bool     s_force[PROVIDER_COUNT]      = {false};
+static bool s_force[PROVIDER_COUNT] = {false};
 
 // Per-provider descriptor: the broker JSON key its token arrives under, and the
 // fetch routine that maps its (unique) API into s_usage. Adding a provider =
 // one fetch_*() + one row here (+ a Cred buffer above and a data.h enum entry).
 static void fetch_claude(int prov);
 static void fetch_codex(int prov);
-struct NetProvider { const char* broker_key; void (*fetch)(int prov); };
+struct NetProvider {
+    const char* broker_key;
+    void (*fetch)(int prov);
+};
 static const NetProvider PROVIDERS[PROVIDER_COUNT] = {
-    { "claude", fetch_claude },
-    { "codex",  fetch_codex  },
+    {"claude", fetch_claude},
+    {"codex", fetch_codex},
 };
 
 // Broker (token source) reachability. Resolved once per session; /tokens calls
 // are throttled to FETCH_INTERVAL_MS so a rejected/expired token can't storm.
 static IPAddress s_broker_ip;
-static bool      s_broker_resolved   = false;
-static bool      s_broker_attempted  = false;  // have we tried /tokens since boot?
-static bool      s_broker_reachable  = false;  // did the last attempt get a reply?
-static uint32_t  s_broker_last_attempt = 0;
+static bool s_broker_resolved = false;
+static bool s_broker_attempted = false;  // have we tried /tokens since boot?
+static bool s_broker_reachable = false;  // did the last attempt get a reply?
+static uint32_t s_broker_last_attempt = 0;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -127,12 +137,9 @@ static int epoch_to_mins(long epoch) {
 // of this — it deliberately ignores *_reset_mins (which tick every fetch); keep
 // the two in sync if ProviderUsage gains a field.
 static bool provider_eq(const ProviderUsage& a, const ProviderUsage& b) {
-    return a.session_pct == b.session_pct &&
-           a.session_reset_mins == b.session_reset_mins &&
-           a.weekly_pct == b.weekly_pct &&
-           a.weekly_reset_mins == b.weekly_reset_mins &&
-           a.ok == b.ok && a.present == b.present &&
-           strcmp(a.status, b.status) == 0;
+    return a.session_pct == b.session_pct && a.session_reset_mins == b.session_reset_mins &&
+           a.weekly_pct == b.weekly_pct && a.weekly_reset_mins == b.weekly_reset_mins &&
+           a.ok == b.ok && a.present == b.present && strcmp(a.status, b.status) == 0;
 }
 
 // Publish s_usage to main.cpp only when a field actually changed — a failing
@@ -144,16 +151,18 @@ static bool provider_eq(const ProviderUsage& a, const ProviderUsage& b) {
 static void publish_if_changed(void) {
     bool changed = false;
     for (int i = 0; i < PROVIDER_COUNT; i++)
-        if (!provider_eq(s_usage[i], s_pub.providers[i])) { changed = true; break; }
+        if (!provider_eq(s_usage[i], s_pub.providers[i])) {
+            changed = true;
+            break;
+        }
     if (!changed) return;
     for (int i = 0; i < PROVIDER_COUNT; i++) s_pub.providers[i] = s_usage[i];
     s_pub.valid = true;
-    s_has_data  = true;
+    s_has_data = true;
 }
 
-static void configure_tls(WiFiClientSecure &c) {
-    c.setCACertBundle(x509_crt_bundle_start,
-                      (size_t)(x509_crt_bundle_end - x509_crt_bundle_start));
+static void configure_tls(WiFiClientSecure& c) {
+    c.setCACertBundle(x509_crt_bundle_start, (size_t)(x509_crt_bundle_end - x509_crt_bundle_start));
 }
 
 // ---------------------------------------------------------------------------
@@ -200,8 +209,8 @@ static void apply_token(int prov, JsonVariantConst o) {
         if (c.account) c.account[0] = '\0';
         s_tok[prov] = TOK_NEEDS_ACTION;
         s_need_fetch[prov] = false;
-        Serial.printf("[net] broker needs_action prov=%d: %s\n",
-                      prov, (const char*)(o["needs_action"] | "?"));
+        Serial.printf("[net] broker needs_action prov=%d: %s\n", prov,
+                      (const char*)(o["needs_action"] | "?"));
     } else {
         // Provider key absent or malformed (shouldn't happen per the broker
         // contract). Leave need_fetch as-is so the throttled retry tries again
@@ -222,8 +231,8 @@ static void fetch_tokens(void) {
     http.setConnectTimeout(HTTP_CONNECT_TIMEOUT);
     http.setTimeout(HTTP_READ_TIMEOUT);
     char url[80];  // "http://" + IP (≤39 for IPv6) + ":port" + "/tokens" + NUL
-    snprintf(url, sizeof(url), "http://%s:%u/tokens",
-             s_broker_ip.toString().c_str(), (unsigned)DAEMON_PORT);
+    snprintf(url, sizeof(url), "http://%s:%u/tokens", s_broker_ip.toString().c_str(),
+             (unsigned)DAEMON_PORT);
     if (!http.begin(client, url)) {
         Serial.println("[net] broker begin() failed");
         http.end();
@@ -245,8 +254,7 @@ static void fetch_tokens(void) {
     }
     // Parseable reply = broker is reachable (clears USAGE_BROKER_DOWN).
     s_broker_reachable = true;
-    for (int i = 0; i < PROVIDER_COUNT; i++)
-        apply_token(i, doc[PROVIDERS[i].broker_key]);
+    for (int i = 0; i < PROVIDER_COUNT; i++) apply_token(i, doc[PROVIDERS[i].broker_key]);
 }
 
 // ---------------------------------------------------------------------------
@@ -280,11 +288,9 @@ static void fetch_claude(int prov) {
         http.end();
         return;
     }
-    static const char *keep[] = {
-        "anthropic-ratelimit-unified-5h-utilization",
-        "anthropic-ratelimit-unified-5h-reset",
-        "anthropic-ratelimit-unified-7d-utilization",
-        "anthropic-ratelimit-unified-7d-reset",
+    static const char* keep[] = {
+        "anthropic-ratelimit-unified-5h-utilization", "anthropic-ratelimit-unified-5h-reset",
+        "anthropic-ratelimit-unified-7d-utilization", "anthropic-ratelimit-unified-7d-reset",
         "anthropic-ratelimit-unified-status",
     };
     http.collectHeaders(keep, sizeof(keep) / sizeof(keep[0]));
@@ -305,10 +311,12 @@ static void fetch_claude(int prov) {
     String u5 = http.header("anthropic-ratelimit-unified-5h-utilization");
     String u7 = http.header("anthropic-ratelimit-unified-7d-utilization");
     if (code == 200 && u5.length() && u7.length()) {
-        u.session_pct        = roundf(u5.toFloat() * 100.0f);
-        u.weekly_pct         = roundf(u7.toFloat() * 100.0f);
-        u.session_reset_mins = epoch_to_mins(http.header("anthropic-ratelimit-unified-5h-reset").toInt());
-        u.weekly_reset_mins  = epoch_to_mins(http.header("anthropic-ratelimit-unified-7d-reset").toInt());
+        u.session_pct = roundf(u5.toFloat() * 100.0f);
+        u.weekly_pct = roundf(u7.toFloat() * 100.0f);
+        u.session_reset_mins =
+            epoch_to_mins(http.header("anthropic-ratelimit-unified-5h-reset").toInt());
+        u.weekly_reset_mins =
+            epoch_to_mins(http.header("anthropic-ratelimit-unified-7d-reset").toInt());
         String st = http.header("anthropic-ratelimit-unified-status");
         bool limited = (st.length() && st != "allowed") || u.session_pct >= 100;
         strlcpy(u.status, limited ? "limited" : "allowed", sizeof(u.status));
@@ -359,12 +367,12 @@ static void fetch_codex(int prov) {
             u.ok = false;
             Serial.printf("[net] codex bad body: %s\n", err ? err.c_str() : "no rate_limit");
         } else {
-            u.session_pct = rl["primary_window"]["used_percent"]   | -1;
-            u.weekly_pct  = rl["secondary_window"]["used_percent"] | -1;
-            long pr = rl["primary_window"]["reset_after_seconds"]   | -1L;
+            u.session_pct = rl["primary_window"]["used_percent"] | -1;
+            u.weekly_pct = rl["secondary_window"]["used_percent"] | -1;
+            long pr = rl["primary_window"]["reset_after_seconds"] | -1L;
             long sr = rl["secondary_window"]["reset_after_seconds"] | -1L;
             u.session_reset_mins = pr >= 0 ? (int)(pr / 60) : -1;
-            u.weekly_reset_mins  = sr >= 0 ? (int)(sr / 60) : -1;
+            u.weekly_reset_mins = sr >= 0 ? (int)(sr / 60) : -1;
             bool allowed = rl["allowed"] | true;
             bool reached = rl["limit_reached"] | false;
             bool limited = !allowed || reached || u.session_pct >= 100;
@@ -385,26 +393,29 @@ static void fetch_codex(int prov) {
 // ---------------------------------------------------------------------------
 
 void net_init(void) {
-    s_state           = NET_CONNECTING;
-    s_has_data        = false;
-    s_pub             = UsageData{};   // zero → the first fetch always publishes
+    s_state = NET_CONNECTING;
+    s_has_data = false;
+    s_pub = UsageData{};  // zero → the first fetch always publishes
     for (int i = 0; i < PROVIDER_COUNT; i++) {
         s_last_update_ms[i] = 0;
-        s_force[i]          = false;
-        s_last_fetch[i]     = 0;
+        s_force[i] = false;
+        s_last_fetch[i] = 0;
         // Per-provider live slot starts at the "no data yet" sentinel (UI shows
         // "Connecting…"); present is always true post-cutover.
-        s_usage[i].session_pct = -1; s_usage[i].session_reset_mins = -1;
-        s_usage[i].weekly_pct  = -1; s_usage[i].weekly_reset_mins  = -1;
+        s_usage[i].session_pct = -1;
+        s_usage[i].session_reset_mins = -1;
+        s_usage[i].weekly_pct = -1;
+        s_usage[i].weekly_reset_mins = -1;
         strlcpy(s_usage[i].status, "unknown", sizeof(s_usage[i].status));
-        s_usage[i].ok = false; s_usage[i].present = true;
+        s_usage[i].ok = false;
+        s_usage[i].present = true;
     }
-    s_broker_resolved   = false;
-    s_broker_attempted  = false;
-    s_broker_reachable  = false;
+    s_broker_resolved = false;
+    s_broker_attempted = false;
+    s_broker_reachable = false;
     s_broker_last_attempt = 0;
-    s_ssid_buf[0]     = '\0';
-    s_ip_buf[0]       = '\0';
+    s_ssid_buf[0] = '\0';
+    s_ip_buf[0] = '\0';
 
     // Load cached credentials from NVS. A provider with a stored token starts
     // ready; a missing one starts MISSING and pulls from the broker once online.
@@ -414,9 +425,10 @@ void net_init(void) {
         if (s_cred[i].account) s_cred[i].account[0] = '\0';
         s_tok[i] = TOK_MISSING;
         s_need_fetch[i] = true;
-        if (token_store_load(i, s_cred[i].token, s_cred[i].token_cap,
-                             s_cred[i].account, s_cred[i].account_cap)) {
-            s_tok[i] = TOK_OK; s_need_fetch[i] = false;
+        if (token_store_load(i, s_cred[i].token, s_cred[i].token_cap, s_cred[i].account,
+                             s_cred[i].account_cap)) {
+            s_tok[i] = TOK_OK;
+            s_need_fetch[i] = false;
         }
     }
 
@@ -433,7 +445,7 @@ void net_tick(void) {
 
     if (s_state == NET_ONLINE && wifi_status != WL_CONNECTED) {
         Serial.println("[net] WiFi lost — NET_DISCONNECTED");
-        s_state     = NET_DISCONNECTED;
+        s_state = NET_DISCONNECTED;
         s_ip_buf[0] = '\0';
         // The cached broker IP is a per-association DNS result — drop it so a
         // reconnect (DHCP churn, host moved, roam) re-resolves DAEMON_HOST.
@@ -462,7 +474,8 @@ void net_tick(void) {
         (wifi_status == WL_CONNECT_FAILED || wifi_status == WL_NO_SSID_AVAIL)) {
         static uint32_t s_last_retry_ms = 0;
         if (millis() - s_last_retry_ms >= 15000) {
-            Serial.printf("[net] WiFi terminal status %d — retrying WiFi.begin()\n", (int)wifi_status);
+            Serial.printf("[net] WiFi terminal status %d — retrying WiFi.begin()\n",
+                          (int)wifi_status);
             WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
             s_last_retry_ms = millis();
         }
@@ -483,7 +496,7 @@ void net_tick(void) {
     bool broker_due = need && (!s_broker_attempted ||
                                (now - s_broker_last_attempt) >= (uint32_t)FETCH_INTERVAL_MS);
     if (broker_due) {
-        s_broker_attempted   = true;
+        s_broker_attempted = true;
         s_broker_last_attempt = now;
         fetch_tokens();
         return;
@@ -505,7 +518,9 @@ void net_tick(void) {
     }
 }
 
-net_state_t net_get_state(void) { return s_state; }
+net_state_t net_get_state(void) {
+    return s_state;
+}
 
 bool net_get_usage(UsageData* out) {
     if (!s_has_data) return false;
@@ -524,9 +539,15 @@ void net_request_refresh(void) {
     s_broker_attempted = false;
 }
 
-const char* net_get_ssid(void) { return s_ssid_buf; }
-const char* net_get_ip(void)   { return s_ip_buf; }
-int         net_get_rssi(void) { return WiFi.RSSI(); }
+const char* net_get_ssid(void) {
+    return s_ssid_buf;
+}
+const char* net_get_ip(void) {
+    return s_ip_buf;
+}
+int net_get_rssi(void) {
+    return WiFi.RSSI();
+}
 uint32_t net_last_update_ms(void) {
     // Most-recent fetch across providers — drives the WiFi page's "Updated" line.
     uint32_t m = 0;
@@ -546,7 +567,7 @@ usage_health_t net_provider_health(int prov) {
         if (s_broker_attempted && !s_broker_reachable) return USAGE_BROKER_DOWN;
         return USAGE_NO_TOKEN;
     }
-    if (s_last_update_ms[prov] == 0)  return USAGE_NO_DATA;
+    if (s_last_update_ms[prov] == 0) return USAGE_NO_DATA;
     if (millis() - s_last_update_ms[prov] <= USAGE_STALE_MS) return USAGE_LIVE;
     return USAGE_STALE;
 }

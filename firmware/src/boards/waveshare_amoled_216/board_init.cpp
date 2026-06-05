@@ -1,6 +1,7 @@
-#include "board.h"
 #include <Arduino.h>
 #include <Wire.h>
+
+#include "board.h"
 
 // Bring up the shared I2C bus. AMOLED-2.16 has no IO expander, so this is
 // all the early init needed before display/touch/power/imu HAL calls.

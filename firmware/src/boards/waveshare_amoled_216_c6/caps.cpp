@@ -13,4 +13,6 @@ static const BoardCaps caps = {
     .has_imu = (bool)BOARD_HAS_IMU,
 };
 
-const BoardCaps& board_caps(void) { return caps; }
+const BoardCaps& board_caps(void) {
+    return caps;
+}

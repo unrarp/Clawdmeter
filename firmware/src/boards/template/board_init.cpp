@@ -1,6 +1,7 @@
-#include "board.h"
 #include <Arduino.h>
 #include <Wire.h>
+
+#include "board.h"
 
 // Called once at the very start of setup(), before any HAL device init.
 // At minimum bring up the shared I2C bus. If your board has an IO expander

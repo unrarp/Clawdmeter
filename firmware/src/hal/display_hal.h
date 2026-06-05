@@ -20,8 +20,7 @@ void display_hal_fill_screen(uint16_t color565);
 // Write a w×h RGB565 bitmap at (x, y). Boards with software rotation
 // (e.g. CO5300) transform (x, y, w, h) and the pixel buffer here before
 // pushing to the panel. Shared LVGL flush_cb just calls this — no #ifdef.
-void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h,
-                             const uint16_t* pixels);
+void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h, const uint16_t* pixels);
 
 // Per-loop housekeeping for rotation-aware boards: detects orientation
 // changes from the IMU, blanks the panel, invalidates LVGL, and ramps

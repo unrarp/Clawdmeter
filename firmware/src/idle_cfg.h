@@ -7,12 +7,12 @@
 // minute; the dim/off windows below are plain idle windows (dim well before
 // off), not tied to any data cadence.
 
-#define IDLE_DIM_MS                 (6UL  * 60UL * 1000UL)  // 6 min idle  -> dim panel
-#define IDLE_TIMEOUT_MS             (12UL * 60UL * 1000UL)  // 12 min idle -> power off
+#define IDLE_DIM_MS     (6UL * 60UL * 1000UL)   // 6 min idle  -> dim panel
+#define IDLE_TIMEOUT_MS (12UL * 60UL * 1000UL)  // 12 min idle -> power off
 
-#define DISPLAY_DEFAULT_BRIGHTNESS  200      // active-screen brightness
+#define DISPLAY_DEFAULT_BRIGHTNESS 200  // active-screen brightness
 // AMOLED current scales ~linearly with brightness, so dimming trims idle draw.
-#define DISPLAY_DIM_BRIGHTNESS      40       // dimmed brightness (IDLE_DIM_MS .. IDLE_TIMEOUT_MS)
+#define DISPLAY_DIM_BRIGHTNESS 40  // dimmed brightness (IDLE_DIM_MS .. IDLE_TIMEOUT_MS)
 
 // When false (default), auto power-off only fires on battery — never while USB
 // is connected (a desk-plugged device stays on, and the AXP won't stay off with

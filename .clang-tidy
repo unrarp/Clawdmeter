@@ -1,0 +1,23 @@
+# clang-tidy static-analysis config. Curated for embedded C++: bug-prone
+# patterns, performance, portability, and core static analysis. modernize-*/
+# readability-* are intentionally left off so the baseline stays quiet; enable
+# them incrementally. Needs a compile DB: `pio run -d firmware -t compiledb`
+# (writes firmware/compile_commands.json, gitignored). Then e.g.:
+#   .venv-dev/bin/clang-tidy -p firmware firmware/src/ui.cpp
+# High-signal checks only. The broad misc-*/modernize-*/readability-* families
+# are dominated by stylistic nags that don't fit this embedded C-style code
+# (anonymous-namespace, include-cleaner, const-correctness, pragma-once) — left
+# off deliberately. bugprone-easily-swappable-parameters and pragma-once are
+# excluded for the same reason.
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  portability-*,
+  clang-analyzer-*,
+  misc-header-include-cycle,
+  misc-definitions-in-headers,
+  -bugprone-easily-swappable-parameters,
+  -portability-avoid-pragma-once
+HeaderFilterRegex: 'firmware/src/.*'
+WarningsAsErrors: ''

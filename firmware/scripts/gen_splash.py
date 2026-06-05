@@ -5,8 +5,9 @@ from the committed binary data in tools/svg_anim_data/ when needed.
 Registered in platformio.ini as:
     extra_scripts = pre:scripts/gen_splash.py
 """
-import sys
+
 import os
+import sys
 
 Import("env")  # noqa: F821  (SCons injects this)
 

@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
-#include "data.h"   // UsageData — net writes provider usage directly (no wire JSON)
+
+#include "data.h"  // UsageData — net writes provider usage directly (no wire JSON)
 
 typedef enum { NET_DISCONNECTED, NET_CONNECTING, NET_ONLINE } net_state_t;
 
@@ -20,22 +21,24 @@ typedef enum { NET_DISCONNECTED, NET_CONNECTING, NET_ONLINE } net_state_t;
 // (re)fetch tokens (first boot / a 401), so this verdict is about provider data
 // freshness, not a live connection to the host daemon.
 typedef enum {
-    USAGE_OFFLINE,      // WiFi not online — can't say anything about data/broker
-    USAGE_NEEDS_ACTION, // broker said 409 — user must re-auth a provider (run claude setup-token / codex)
-    USAGE_BROKER_DOWN,  // a token is needed but the broker is unreachable
-    USAGE_NO_TOKEN,     // online, fetching tokens from the broker (none cached yet)
-    USAGE_NO_DATA,      // tokens in hand, but no good provider fetch has ever landed
-    USAGE_LIVE,         // last good provider fetch is within the staleness window
-    USAGE_STALE,        // last good provider fetch is older than the staleness window
+    USAGE_OFFLINE,       // WiFi not online — can't say anything about data/broker
+    USAGE_NEEDS_ACTION,  // broker said 409 — user must re-auth a provider (run claude setup-token /
+                         // codex)
+    USAGE_BROKER_DOWN,   // a token is needed but the broker is unreachable
+    USAGE_NO_TOKEN,      // online, fetching tokens from the broker (none cached yet)
+    USAGE_NO_DATA,       // tokens in hand, but no good provider fetch has ever landed
+    USAGE_LIVE,          // last good provider fetch is within the staleness window
+    USAGE_STALE,         // last good provider fetch is older than the staleness window
 } usage_health_t;
 
-void        net_init(void);            // WiFi.begin() with creds from net_config.h
-void        net_tick(void);            // non-blocking: drive reconnect + periodic GET
+void net_init(void);  // WiFi.begin() with creds from net_config.h
+void net_tick(void);  // non-blocking: drive reconnect + periodic GET
 net_state_t net_get_state(void);
-bool        net_get_usage(UsageData* out);  // true + fills out iff usage changed since last call (clear-on-read)
-void        net_request_refresh(void); // force an immediate GET on next tick
-const char* net_get_ssid(void);        // diagnostics
-const char* net_get_ip(void);          // diagnostics (dotted string)
-int         net_get_rssi(void);        // diagnostics (dBm)
-uint32_t    net_last_update_ms(void);    // millis() of most-recent good GET across providers; 0 if none
-usage_health_t  net_provider_health(int prov);  // derived per-provider usage/auth verdict (see enum)
+bool net_get_usage(
+    UsageData* out);  // true + fills out iff usage changed since last call (clear-on-read)
+void net_request_refresh(void);     // force an immediate GET on next tick
+const char* net_get_ssid(void);     // diagnostics
+const char* net_get_ip(void);       // diagnostics (dotted string)
+int net_get_rssi(void);             // diagnostics (dBm)
+uint32_t net_last_update_ms(void);  // millis() of most-recent good GET across providers; 0 if none
+usage_health_t net_provider_health(int prov);  // derived per-provider usage/auth verdict (see enum)

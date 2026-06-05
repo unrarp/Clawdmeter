@@ -1,0 +1,7 @@
+# Generated data files — never hand-format (see AGENTS.md "Icons & splash regen"
+# and the fonts rule). Patterns are relative to this file (repo root) and follow
+# .gitignore-style globbing. clang-format skips any path matching these.
+firmware/src/font_*.c
+firmware/src/logos.h
+firmware/src/icons.h
+firmware/src/splash_animations.h

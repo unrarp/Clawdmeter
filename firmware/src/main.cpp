@@ -1,22 +1,21 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <lvgl.h>
 #include <esp_heap_caps.h>
+#include <lvgl.h>
 
 #include "data.h"
-#include "ui.h"
-#include "net.h"
-#include "splash.h"
-#include "usage_rate.h"
-#include "idle.h"
-#include "idle_cfg.h"
-
 #include "hal/board_caps.h"
 #include "hal/display_hal.h"
-#include "hal/touch_hal.h"
+#include "hal/imu_hal.h"
 #include "hal/input_hal.h"
 #include "hal/power_hal.h"
-#include "hal/imu_hal.h"
+#include "hal/touch_hal.h"
+#include "idle.h"
+#include "idle_cfg.h"
+#include "net.h"
+#include "splash.h"
+#include "ui.h"
+#include "usage_rate.h"
 
 static UsageData usage = {};
 
@@ -25,16 +24,18 @@ static UsageData usage = {};
 // boards (e.g. ESP32-C6) allocate from internal SRAM, so we shrink the strip
 // — 480×20 RGB565 = 19 KB × 2 buffers = 38 KB, fits beside everything else.
 #ifdef BOARD_HAS_PSRAM
-#define BUF_LINES 40
+#define BUF_LINES   40
 #define LV_BUF_CAPS (MALLOC_CAP_SPIRAM)
 #else
-#define BUF_LINES 20
+#define BUF_LINES   20
 #define LV_BUF_CAPS (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
 #endif
 static uint16_t* buf1 = nullptr;
 static uint16_t* buf2 = nullptr;
 
-static uint32_t my_tick(void) { return millis(); }
+static uint32_t my_tick(void) {
+    return millis();
+}
 
 static void my_flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map) {
     int32_t w = area->x2 - area->x1 + 1;
@@ -90,15 +91,16 @@ static void send_screenshot() {
     lv_draw_buf_t draw_buf;
     lv_draw_buf_init(&draw_buf, w, h, LV_COLOR_FORMAT_RGB565, row_bytes, sbuf, buf_size);
 
-    lv_result_t res = lv_snapshot_take_to_draw_buf(lv_screen_active(), LV_COLOR_FORMAT_RGB565, &draw_buf);
+    lv_result_t res =
+        lv_snapshot_take_to_draw_buf(lv_screen_active(), LV_COLOR_FORMAT_RGB565, &draw_buf);
     if (res != LV_RESULT_OK) {
         heap_caps_free(sbuf);
         Serial.println("SCREENSHOT_ERR");
         return;
     }
 
-    Serial.printf("SCREENSHOT_START %lu %lu %lu\n",
-        (unsigned long)w, (unsigned long)h, (unsigned long)buf_size);
+    Serial.printf("SCREENSHOT_START %lu %lu %lu\n", (unsigned long)w, (unsigned long)h,
+                  (unsigned long)buf_size);
     Serial.flush();
     Serial.write(sbuf, buf_size);
     Serial.flush();
@@ -145,7 +147,7 @@ void setup() {
 
     display_hal_init();
     display_hal_begin();
-    idle_init();   // takes over brightness (DISPLAY_DEFAULT_BRIGHTNESS) and starts the idle timer
+    idle_init();  // takes over brightness (DISPLAY_DEFAULT_BRIGHTNESS) and starts the idle timer
 
     power_hal_init();
     imu_hal_init();
@@ -164,8 +166,7 @@ void setup() {
     lv_display_t* disp = lv_display_create(W, H);
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
     lv_display_set_flush_cb(disp, my_flush_cb);
-    lv_display_set_buffers(disp, buf1, buf2, W * BUF_LINES * 2,
-                           LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_buffers(disp, buf1, buf2, W * BUF_LINES * 2, LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_add_event_cb(disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
 
     lv_indev_t* indev = lv_indev_create();
@@ -178,21 +179,21 @@ void setup() {
     ui_init();
     usage_health_t h0[PROVIDER_COUNT];
     for (int i = 0; i < PROVIDER_COUNT; i++) h0[i] = net_provider_health(i);
-    ui_update_wifi_status(net_get_state(), net_get_ssid(), net_get_ip(),
-                          net_last_update_ms(), h0);
-    int  boot_pct      = power_hal_battery_pct();
+    ui_update_wifi_status(net_get_state(), net_get_ssid(), net_get_ip(), net_last_update_ms(), h0);
+    int boot_pct = power_hal_battery_pct();
     bool boot_charging = power_hal_is_charging();
     ui_update_battery(boot_pct, boot_charging);
-    splash_set_battery(boot_pct, boot_charging);   // seed so a low-battery boot opens on the right clip
+    splash_set_battery(boot_pct,
+                       boot_charging);  // seed so a low-battery boot opens on the right clip
     ui_show_screen(SCREEN_SPLASH);
 
-    Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on WiFi...\n",
-        board_caps().name, W, H);
+    Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on WiFi...\n", board_caps().name,
+                  W, H);
 }
 
-static net_state_t     last_net_state = NET_DISCONNECTED;
+static net_state_t last_net_state = NET_DISCONNECTED;
 // Per-provider WiFi-page verdict latch (USAGE_OFFLINE == 0 → zero-init is correct).
-static usage_health_t  last_health[PROVIDER_COUNT] = {};
+static usage_health_t last_health[PROVIDER_COUNT] = {};
 
 static float max_present_session_pct(const UsageData& u) {
     float m = -1.0f;
@@ -200,7 +201,7 @@ static float max_present_session_pct(const UsageData& u) {
         const ProviderUsage& p = u.providers[i];
         if (p.present && p.session_pct >= 0 && p.session_pct > m) m = p.session_pct;
     }
-    return m < 0 ? 0.0f : m;   // idle default when no present provider has data
+    return m < 0 ? 0.0f : m;  // idle default when no present provider has data
 }
 
 // True if any substantive usage/state field differs. Deliberately ignores
@@ -211,8 +212,8 @@ static bool usage_changed(const UsageData& a, const UsageData& b) {
         const ProviderUsage& x = a.providers[i];
         const ProviderUsage& y = b.providers[i];
         if (x.session_pct != y.session_pct) return true;
-        if (x.weekly_pct  != y.weekly_pct)  return true;
-        if (x.ok      != y.ok)      return true;
+        if (x.weekly_pct != y.weekly_pct) return true;
+        if (x.ok != y.ok) return true;
         if (x.present != y.present) return true;
         if (strcmp(x.status, y.status) != 0) return true;
     }
@@ -226,7 +227,10 @@ struct EdgeButton {
     bool action_edge(bool now) {
         bool fire = false;
         if (now != was) {
-            if (now) { idle_note_activity(); fire = true; }
+            if (now) {
+                idle_note_activity();
+                fire = true;
+            }
             was = now;
         }
         return fire;
@@ -252,8 +256,7 @@ void loop() {
     {
         static EdgeButton primary_btn;
 
-        if (primary_btn.action_edge(input_hal_is_held(INPUT_BTN_PRIMARY)))
-            net_request_refresh();
+        if (primary_btn.action_edge(input_hal_is_held(INPUT_BTN_PRIMARY))) net_request_refresh();
 
         if (board_caps().button_count >= 2) {
             static EdgeButton secondary_btn;
@@ -262,8 +265,10 @@ void loop() {
 
         if (power_hal_pwr_pressed()) {
             idle_note_activity();
-            if (ui_get_current_screen() == SCREEN_SPLASH) splash_next();
-            else                                          ui_cycle_screen();
+            if (ui_get_current_screen() == SCREEN_SPLASH)
+                splash_next();
+            else
+                ui_cycle_screen();
         }
     }
 
@@ -272,10 +277,10 @@ void loop() {
     // after that provider's last good GET ages out), so it's polled every loop —
     // but we only touch the labels when a verdict changes, so there's no periodic
     // redraw.
-    net_state_t    ns = net_get_state();
+    net_state_t ns = net_get_state();
     usage_health_t h[PROVIDER_COUNT];
     for (int i = 0; i < PROVIDER_COUNT; i++) h[i] = net_provider_health(i);
-    uint32_t       lu = net_last_update_ms();
+    uint32_t lu = net_last_update_ms();
     bool health_changed = false;
     for (int i = 0; i < PROVIDER_COUNT; i++) health_changed |= (h[i] != last_health[i]);
     if (ns != last_net_state || health_changed) {
@@ -284,9 +289,9 @@ void loop() {
         ui_update_wifi_status(ns, net_get_ssid(), net_get_ip(), lu, h);
     }
 
-    static int  last_pct      = -2;
+    static int last_pct = -2;
     static bool last_charging = false;
-    int  pct      = power_hal_battery_pct();
+    int pct = power_hal_battery_pct();
     bool charging = power_hal_is_charging();
     if (pct != last_pct || charging != last_charging) {
         last_pct = pct;
@@ -307,13 +312,13 @@ void loop() {
             // flapping provider would therefore hold the panel awake.
             if (usage_changed(usage, fresh)) idle_note_activity();
             usage = fresh;
-            int   g_before  = usage_rate_group();
-            float max_pct   = max_present_session_pct(usage);
+            int g_before = usage_rate_group();
+            float max_pct = max_present_session_pct(usage);
             usage_rate_sample(max_pct);
             int g_after = usage_rate_group();
             if (g_after != g_before) {
-                Serial.printf("usage rate: group %d -> %d (s=%.2f%%)\n",
-                    g_before, g_after, max_pct);
+                Serial.printf("usage rate: group %d -> %d (s=%.2f%%)\n", g_before, g_after,
+                              max_pct);
                 if (splash_is_active()) splash_pick_for_current_rate();
             }
             ui_update(&usage);

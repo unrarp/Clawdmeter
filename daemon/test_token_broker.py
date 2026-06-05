@@ -50,19 +50,24 @@ class ClaudeTokenTests(unittest.TestCase):
             self.assertEqual(b.claude_token(), "sk-ant-oat01-X")
 
     def test_empty_env_falls_through_to_missing_file(self):
-        with patch.dict(os.environ, {b.CLAUDE_TOKEN_ENV: "   "}), \
-             patch.object(b, "CLAUDE_TOKEN_FILE", b.Path("/nonexistent/clawd_tok")):
+        with (
+            patch.dict(os.environ, {b.CLAUDE_TOKEN_ENV: "   "}),
+            patch.object(b, "CLAUDE_TOKEN_FILE", b.Path("/nonexistent/clawd_tok")),
+        ):
             self.assertIsNone(b.claude_token())
 
     def test_file_used_when_env_absent(self):
         import tempfile
+
         with tempfile.NamedTemporaryFile("w", suffix=".tok", delete=False) as f:
             f.write("file-token\n")
             path = f.name
         try:
             env = {k: v for k, v in os.environ.items() if k != b.CLAUDE_TOKEN_ENV}
-            with patch.dict(os.environ, env, clear=True), \
-                 patch.object(b, "CLAUDE_TOKEN_FILE", b.Path(path)):
+            with (
+                patch.dict(os.environ, env, clear=True),
+                patch.object(b, "CLAUDE_TOKEN_FILE", b.Path(path)),
+            ):
                 self.assertEqual(b.claude_token(), "file-token")
         finally:
             os.unlink(path)
@@ -71,9 +76,9 @@ class ClaudeTokenTests(unittest.TestCase):
 class CodexCredsTests(unittest.TestCase):
     def _write_auth(self, obj):
         import tempfile
-        f = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
-        json.dump(obj, f)
-        f.close()
+
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(obj, f)
         return f.name
 
     def test_valid(self):
@@ -99,24 +104,30 @@ class CodexCredsTests(unittest.TestCase):
 
 class BuildTokensTests(unittest.TestCase):
     def test_both_usable_is_200(self):
-        with patch.object(b, "claude_token", lambda: "sk-ant-oat01-X"), \
-             patch.object(b, "codex_creds", lambda: (mkjwt(int(time.time()) + 99999), "acct")):
+        with (
+            patch.object(b, "claude_token", lambda: "sk-ant-oat01-X"),
+            patch.object(b, "codex_creds", lambda: (mkjwt(int(time.time()) + 99999), "acct")),
+        ):
             code, body = b.build_tokens()
         self.assertEqual(code, 200)
         self.assertEqual(body["claude"]["token"], "sk-ant-oat01-X")
         self.assertEqual(body["codex"]["account_id"], "acct")
 
     def test_missing_claude_is_409_but_codex_token_present(self):
-        with patch.object(b, "claude_token", lambda: None), \
-             patch.object(b, "codex_creds", lambda: (mkjwt(int(time.time()) + 99999), "acct")):
+        with (
+            patch.object(b, "claude_token", lambda: None),
+            patch.object(b, "codex_creds", lambda: (mkjwt(int(time.time()) + 99999), "acct")),
+        ):
             code, body = b.build_tokens()
         self.assertEqual(code, 409)
         self.assertIn("needs_action", body["claude"])
         self.assertIn("token", body["codex"])
 
     def test_expired_codex_is_409(self):
-        with patch.object(b, "claude_token", lambda: "X"), \
-             patch.object(b, "codex_creds", lambda: (mkjwt(int(time.time()) - 10), "acct")):
+        with (
+            patch.object(b, "claude_token", lambda: "X"),
+            patch.object(b, "codex_creds", lambda: (mkjwt(int(time.time()) - 10), "acct")),
+        ):
             code, body = b.build_tokens()
         self.assertEqual(code, 409)
         self.assertIn("expired", body["codex"]["needs_action"])
@@ -124,23 +135,32 @@ class BuildTokensTests(unittest.TestCase):
     def test_near_expiry_codex_is_409(self):
         # Still valid by the clock, but within CODEX_EXP_MARGIN of expiry — must
         # be treated as unusable so the device re-auths before the token dies.
-        with patch.object(b, "claude_token", lambda: "X"), \
-             patch.object(b, "codex_creds",
-                          lambda: (mkjwt(int(time.time()) + b.CODEX_EXP_MARGIN - 30), "acct")):
+        with (
+            patch.object(b, "claude_token", lambda: "X"),
+            patch.object(
+                b,
+                "codex_creds",
+                lambda: (mkjwt(int(time.time()) + b.CODEX_EXP_MARGIN - 30), "acct"),
+            ),
+        ):
             code, body = b.build_tokens()
         self.assertEqual(code, 409)
         self.assertIn("expired", body["codex"]["needs_action"])
 
     def test_unparseable_codex_is_409(self):
-        with patch.object(b, "claude_token", lambda: "X"), \
-             patch.object(b, "codex_creds", lambda: ("garbage", "acct")):
+        with (
+            patch.object(b, "claude_token", lambda: "X"),
+            patch.object(b, "codex_creds", lambda: ("garbage", "acct")),
+        ):
             code, body = b.build_tokens()
         self.assertEqual(code, 409)
         self.assertIn("unparseable", body["codex"]["needs_action"])
 
     def test_both_absent_is_409_with_needs_action_and_no_tokens(self):
-        with patch.object(b, "claude_token", lambda: None), \
-             patch.object(b, "codex_creds", lambda: None):
+        with (
+            patch.object(b, "claude_token", lambda: None),
+            patch.object(b, "codex_creds", lambda: None),
+        ):
             code, body = b.build_tokens()
         self.assertEqual(code, 409)
         self.assertIn("needs_action", body["claude"])
@@ -157,8 +177,11 @@ class HttpEndpointTests(unittest.TestCase):
         cls._key_patch = patch.object(b, "BROKER_KEY", "testkey123")
         cls._claude_patch = patch.object(b, "claude_token", lambda: "sk-ant-oat01-X")
         cls._codex_patch = patch.object(
-            b, "codex_creds", lambda: (mkjwt(int(time.time()) + 99999), "acct"))
-        cls._key_patch.start(); cls._claude_patch.start(); cls._codex_patch.start()
+            b, "codex_creds", lambda: (mkjwt(int(time.time()) + 99999), "acct")
+        )
+        cls._key_patch.start()
+        cls._claude_patch.start()
+        cls._codex_patch.start()
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), b.BrokerHandler)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -166,8 +189,11 @@ class HttpEndpointTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.server.shutdown(); cls.server.server_close()
-        cls._codex_patch.stop(); cls._claude_patch.stop(); cls._key_patch.stop()
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls._codex_patch.stop()
+        cls._claude_patch.stop()
+        cls._key_patch.stop()
 
     def _get(self, path, key=None):
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}")

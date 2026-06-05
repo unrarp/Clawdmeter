@@ -1,8 +1,10 @@
-#include <Arduino.h>
 #include "idle.h"
-#include "idle_cfg.h"
+
+#include <Arduino.h>
+
 #include "hal/display_hal.h"
 #include "hal/power_hal.h"
+#include "idle_cfg.h"
 
 // Inactivity ladder, battery only:
 //   < IDLE_DIM_MS      : full brightness
@@ -18,7 +20,7 @@
 // USB is unplugged. Brightness is only written on a transition (no per-tick I2C).
 
 static uint32_t last_activity_ms = 0;
-static bool     dimmed = false;
+static bool dimmed = false;
 
 // Restore full brightness if we'd dimmed. Cheap no-op when already bright.
 static void undim(void) {

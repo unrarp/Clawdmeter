@@ -7,13 +7,13 @@
 // WiFi-page health verdict, not a blanked panel. The present==false "No <provider>
 // account" path is retained but latent (see .claude/rules/ui.md).
 struct ProviderUsage {
-    float session_pct;        // 5-hour window utilization (0-100), -1 = no data
-    int   session_reset_mins; // minutes until session resets
-    float weekly_pct;         // 7-day window utilization (0-100), -1 = no data
-    int   weekly_reset_mins;  // minutes until weekly resets
-    char  status[16];         // "allowed" / "limited" (parsed; not currently rendered)
-    bool  ok;                 // last poll for this provider succeeded
-    bool  present;            // always true post-cutover; false path latent
+    float session_pct;       // 5-hour window utilization (0-100), -1 = no data
+    int session_reset_mins;  // minutes until session resets
+    float weekly_pct;        // 7-day window utilization (0-100), -1 = no data
+    int weekly_reset_mins;   // minutes until weekly resets
+    char status[16];         // "allowed" / "limited" (parsed; not currently rendered)
+    bool ok;                 // last poll for this provider succeeded
+    bool present;            // always true post-cutover; false path latent
 };
 
 // Provider order is the UI/fetch order, and the index into every per-provider
@@ -31,5 +31,5 @@ enum { PROV_CLAUDE = 0, PROV_CODEX, PROVIDER_COUNT };
 
 struct UsageData {
     ProviderUsage providers[PROVIDER_COUNT];
-    bool valid;               // false until first successful parse
+    bool valid;  // false until first successful parse
 };

@@ -1,7 +1,8 @@
-#include "board.h"
 #include <Arduino.h>
 #include <Wire.h>
 #include <XPowersLib.h>
+
+#include "board.h"
 
 // On this C6 board the SH8601 LCD + CST9217 touch are powered from the
 // AXP2101's ALDO rails, not directly from 3V3. The display init must run
@@ -13,7 +14,7 @@
 //   DC1 = 3.3V (system rail)
 //   ALDO1..4 = 3.3V, all enabled (LCD, touch, sensors)
 
-XPowersPMU board_pmu;   // shared instance — power.cpp uses extern reference
+XPowersPMU board_pmu;  // shared instance — power.cpp uses extern reference
 
 extern "C" void board_init(void) {
     Wire.begin(IIC_SDA, IIC_SCL);

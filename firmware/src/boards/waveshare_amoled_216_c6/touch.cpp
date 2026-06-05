@@ -1,13 +1,15 @@
-#include "../../hal/touch_hal.h"
-#include "board.h"
 #include <Arduino.h>
 #include <Wire.h>
+
 #include <TouchDrvCSTXXX.hpp>
+
+#include "../../hal/touch_hal.h"
+#include "board.h"
 
 static TouchDrvCST92xx touch;
 
-static volatile bool     touch_data_ready = false;
-static volatile bool     touch_pressed = false;
+static volatile bool touch_data_ready = false;
+static volatile bool touch_pressed = false;
 static volatile uint16_t touch_x = 0;
 static volatile uint16_t touch_y = 0;
 

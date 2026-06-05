@@ -1,8 +1,9 @@
-#include "../../hal/power_hal.h"
-#include "board.h"
 #include <Arduino.h>
 #include <Wire.h>
 #include <XPowersLib.h>
+
+#include "../../hal/power_hal.h"
+#include "board.h"
 
 // AXP2101 PMU — identical chip and protocol to the S3 variant.
 
@@ -16,13 +17,13 @@
 extern XPowersPMU board_pmu;
 #define pmu board_pmu
 
-static int      cached_pct       = -1;
-static bool     cached_charging  = false;
-static bool     cached_vbus      = false;
-static bool     pwr_pressed_flag = false;
-static uint32_t last_battery_ms  = 0;
+static int cached_pct = -1;
+static bool cached_charging = false;
+static bool cached_vbus = false;
+static bool pwr_pressed_flag = false;
+static uint32_t last_battery_ms = 0;
 static uint32_t last_charging_ms = 0;
-static uint32_t last_pwr_ms      = 0;
+static uint32_t last_pwr_ms = 0;
 
 void power_hal_init(void) {
     // pmu.begin() already ran in board_init(); just configure battery +
@@ -39,17 +40,17 @@ void power_hal_init(void) {
     pmu.enableIRQ(XPOWERS_AXP2101_PKEY_SHORT_IRQ);
 
     cached_charging = pmu.isCharging();
-    cached_vbus     = pmu.isVbusIn();
+    cached_vbus = pmu.isVbusIn();
     cached_pct = pmu.getBatteryPercent();
 }
 
 void power_hal_tick(void) {
-    uint32_t now = millis(); 
+    uint32_t now = millis();
 
     if (now - last_charging_ms >= CHARGING_POLL_MS) {
         last_charging_ms = now;
         cached_charging = pmu.isCharging();
-        cached_vbus     = pmu.isVbusIn();
+        cached_vbus = pmu.isVbusIn();
     }
     if (now - last_battery_ms >= BATTERY_POLL_MS) {
         last_battery_ms = now;
@@ -65,9 +66,15 @@ void power_hal_tick(void) {
     }
 }
 
-int  power_hal_battery_pct(void) { return cached_pct; }
-bool power_hal_is_charging(void) { return cached_charging; }
-bool power_hal_is_vbus_in(void)  { return cached_vbus; }
+int power_hal_battery_pct(void) {
+    return cached_pct;
+}
+bool power_hal_is_charging(void) {
+    return cached_charging;
+}
+bool power_hal_is_vbus_in(void) {
+    return cached_vbus;
+}
 
 bool power_hal_pwr_pressed(void) {
     if (pwr_pressed_flag) {
@@ -77,4 +84,6 @@ bool power_hal_pwr_pressed(void) {
     return false;
 }
 
-void power_hal_shutdown(void) { pmu.shutdown(); }
+void power_hal_shutdown(void) {
+    pmu.shutdown();
+}

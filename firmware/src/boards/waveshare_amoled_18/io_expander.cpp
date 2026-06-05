@@ -1,17 +1,19 @@
 #include "io_expander.h"
-#include "board.h"
+
 #include <Arduino.h>
 #include <Wire.h>
+
+#include "board.h"
 
 // XCA9554/PCA9554 register map
 #define IOX_REG_INPUT    0x00
 #define IOX_REG_OUTPUT   0x01
 #define IOX_REG_POLARITY 0x02
-#define IOX_REG_CONFIG   0x03   // 1 = input, 0 = output
+#define IOX_REG_CONFIG   0x03  // 1 = input, 0 = output
 
 // EXIO0..2 are outputs (reset lines + audio amp). Everything else is input.
 // Bit layout: 0bIIIIIOOO = 0xF8
-#define IOX_CONFIG_MASK    0xF8
+#define IOX_CONFIG_MASK 0xF8
 // All three outputs HIGH = resets released, amp enabled.
 #define IOX_OUTPUT_DEFAULT 0x07
 
@@ -52,8 +54,10 @@ bool io_expander_init(void) {
 
 void io_expander_set(uint8_t pin, bool high) {
     if (pin > 7) return;
-    if (high) output_state |= (1u << pin);
-    else      output_state &= ~(1u << pin);
+    if (high)
+        output_state |= (1u << pin);
+    else
+        output_state &= ~(1u << pin);
     write_reg(IOX_REG_OUTPUT, output_state);
 }
 

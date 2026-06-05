@@ -1,5 +1,6 @@
-#include <Preferences.h>
 #include "token_store.h"
+
+#include <Preferences.h>
 
 static Preferences prefs;
 static bool s_init = false;
@@ -10,8 +11,7 @@ void token_store_init(void) {
     s_init = true;
 }
 
-bool token_store_load(int prov, char* token, size_t token_sz,
-                      char* account, size_t account_sz) {
+bool token_store_load(int prov, char* token, size_t token_sz, char* account, size_t account_sz) {
     if (prov < 0 || prov >= PROVIDER_COUNT || !token || token_sz == 0) {
         if (token && token_sz > 0) token[0] = '\0';
         if (account && account_sz > 0) account[0] = '\0';

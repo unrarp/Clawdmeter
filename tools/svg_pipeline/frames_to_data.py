@@ -18,13 +18,19 @@ committed binary data:
   - quantize(colors=PAL, method=MEDIANCUT, dither=NONE) over the whole strip
   - hold = period_ms / frames (integer ms per frame)
 """
-import os, sys, glob, json
+
+import glob
+import json
+import os
+import sys
+
 from PIL import Image
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CFG_PATH   = os.path.join(SCRIPT_DIR, "animations.json")
-CACHE_DIR  = os.path.join(SCRIPT_DIR, ".cache")
+CFG_PATH = os.path.join(SCRIPT_DIR, "animations.json")
+CACHE_DIR = os.path.join(SCRIPT_DIR, ".cache")
 FRAMES_DIR = os.path.join(CACHE_DIR, "frames")
+
 
 # --- output dir: env var > --out-dir arg > default ---
 def _resolve_out_dir():
@@ -37,6 +43,7 @@ def _resolve_out_dir():
     # default: tools/svg_anim_data/ (sibling of tools/svg_pipeline/)
     return os.path.join(os.path.dirname(SCRIPT_DIR), "svg_anim_data")
 
+
 OUT_DIR = _resolve_out_dir()
 os.makedirs(OUT_DIR, exist_ok=True)
 
@@ -44,14 +51,15 @@ os.makedirs(OUT_DIR, exist_ok=True)
 with open(CFG_PATH, encoding="utf-8") as _f:
     cfg = json.load(_f)
 params = cfg["params"]
-GRID   = params["grid"]        # 128
-PAL    = params["palette"]     # 24
-HOLD   = params["period_ms"] // params["frames"]   # 60 ms (1200/20)
+GRID = params["grid"]  # 128
+PAL = params["palette"]  # 24
+HOLD = params["period_ms"] // params["frames"]  # 60 ms (1200/20)
 
 # Valid rate-bucket tiers. Mirrors RATE_TIERS in firmware/src/splash.cpp and the
 # usage-rate tiers in usage_rate.cpp. Validated below so a typo fails the build
 # loudly here instead of silently dropping the animation at runtime.
 VALID_GROUPS = ("idle", "normal", "active", "heavy")
+
 
 # --- image math: must match the reference rasterization the committed .bin data
 # was generated with — do NOT alter these constants or the framing logic. ---
@@ -63,39 +71,45 @@ def on_panel(im, size):
     for y in range(size):
         for x in range(size):
             r, g, b = px[x, y]
-            if max(r, g, b) < 26: px[x, y] = (0, 0, 0)
+            if max(r, g, b) < 26:
+                px[x, y] = (0, 0, 0)
     return canv
+
 
 # --- process each animation ---
 index = []
 for anim in cfg["animations"]:
-    svg_name  = anim["svg"]                    # e.g. "clawd-idle-living"
-    name      = anim["name"]                   # e.g. "idle living"
+    svg_name = anim["svg"]  # e.g. "clawd-idle-living"
+    name = anim["name"]  # e.g. "idle living"
     if anim.get("group") not in VALID_GROUPS:
-        raise SystemExit(f"ERROR: animation '{name}' has invalid group {anim.get('group')!r} "
-                         f"in animations.json — must be one of {VALID_GROUPS}")
-    group     = anim["group"]                  # e.g. "idle"
-    stem      = svg_name.replace("clawd-", "") # e.g. "idle-living"
+        raise SystemExit(
+            f"ERROR: animation '{name}' has invalid group {anim.get('group')!r} "
+            f"in animations.json — must be one of {VALID_GROUPS}"
+        )
+    group = anim["group"]  # e.g. "idle"
+    stem = svg_name.replace("clawd-", "")  # e.g. "idle-living"
 
     paths = sorted(glob.glob(os.path.join(FRAMES_DIR, stem, "f*.png")))
     if not paths:
-        raise SystemExit(f"ERROR: no captured frames for {stem} at {os.path.join(FRAMES_DIR, stem)}")
+        raise SystemExit(
+            f"ERROR: no captured frames for {stem} at {os.path.join(FRAMES_DIR, stem)}"
+        )
 
     panels = [on_panel(Image.open(p).convert("RGBA"), GRID) for p in paths]
-    strip  = Image.new("RGB", (GRID * len(panels), GRID))
+    strip = Image.new("RGB", (GRID * len(panels), GRID))
     for i, p in enumerate(panels):
         strip.paste(p, (i * GRID, 0))
 
     q = strip.quantize(colors=PAL, method=Image.MEDIANCUT, dither=Image.NONE)
-    pal_raw     = q.getpalette()[:PAL * 3]
-    palette_hex = ['#%02x%02x%02x' % tuple(pal_raw[i*3:i*3+3]) for i in range(PAL)]
+    pal_raw = q.getpalette()[: PAL * 3]
+    palette_hex = ["#{:02x}{:02x}{:02x}".format(*pal_raw[i * 3 : i * 3 + 3]) for i in range(PAL)]
 
     grids = []
     for i in range(len(panels)):
         px = list(q.crop((i * GRID, 0, i * GRID + GRID, GRID)).getdata())
-        grids.append([px[r * GRID:(r + 1) * GRID] for r in range(GRID)])
+        grids.append([px[r * GRID : (r + 1) * GRID] for r in range(GRID)])
 
-    fname    = "clawd_" + stem.replace("-", "_")   # e.g. "clawd_idle_living"
+    fname = "clawd_" + stem.replace("-", "_")  # e.g. "clawd_idle_living"
     bin_name = fname + ".bin"
     bin_path = os.path.join(OUT_DIR, bin_name)
 
@@ -108,16 +122,18 @@ for anim in cfg["animations"]:
     with open(bin_path, "wb") as bf:
         bf.write(buf)
 
-    index.append({
-        "name":        name,
-        "group":       group,
-        "width":       GRID,
-        "height":      GRID,
-        "frame_count": len(grids),
-        "holds":       [HOLD] * len(grids),
-        "palette":     palette_hex,
-        "bin":         bin_name,
-    })
+    index.append(
+        {
+            "name": name,
+            "group": group,
+            "width": GRID,
+            "height": GRID,
+            "frame_count": len(grids),
+            "holds": [HOLD] * len(grids),
+            "palette": palette_hex,
+            "bin": bin_name,
+        }
+    )
     colors_used = len(set(q.convert("RGB").getdata()))
     print(f"{stem:25s}  {len(grids)} frames, {colors_used} colors used  ->  {bin_path}")
 

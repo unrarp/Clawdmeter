@@ -6,10 +6,11 @@ via PlatformIO's `build_src_filter`. Adding a board means dropping in a new
 folder + a new `[env:...]` block — `main.cpp`, `ui.cpp`, and `splash.cpp`
 never see board-specific code. See [`docs/porting/adding-a-board.md`](docs/porting/adding-a-board.md).
 
-Two reference ports today:
+Three reference ports today:
 
 - `boards/waveshare_amoled_216/` — original Waveshare ESP32-S3-Touch-AMOLED-2.16 (CO5300, 480×480 square, CST9220 touch, IMU rotation). Build env: `waveshare_amoled_216`.
 - `boards/waveshare_amoled_18/` — Waveshare ESP32-S3-Touch-AMOLED-1.8 (SH8601, 368×448 portrait, FT3168 touch, XCA9554 IO expander). Build env: `waveshare_amoled_18`.
+- `boards/waveshare_amoled_216_c6/` — Waveshare ESP32-C6-Touch-AMOLED-2.16 (same display as 216, ESP32-C6 MCU). Build env: `waveshare_amoled_216_c6`.
 
 The shared code calls a small HAL (`firmware/src/hal/`) that each board implements: display, touch, input, power, IMU. Optional features are guarded by `BoardCaps` (runtime) and `BOARD_HAS_*` (compile-time) rather than `#ifdef BOARD_*`.
 
@@ -44,6 +45,46 @@ pio run -d firmware -e waveshare_amoled_216 -t upload --upload-port /dev/ttyACM0
 If `pio` isn't on PATH: try `~/.platformio/penv/bin/pio` (Linux/macOS pio install) or `brew install platformio` on macOS.
 
 Device path differs by OS: `/dev/cu.usbmodem*` on macOS, `/dev/ttyACM0` on Linux. Both expose the ESP32-S3 native USB-JTAG (no boot-mode dance needed).
+
+## Lint / format
+
+One-time setup: **`make setup`** — creates a gitignored `.venv-dev/`, installs the
+pinned tools from `requirements-dev.txt` (self-contained pip wheels; no sudo, Linux
++ macOS), and activates the pre-commit gate via `git config core.hooksPath hooks`.
+Idempotent. Versions are pinned because clang-format output drifts between releases.
+Configs live at repo root. (Dev tooling only — the broker host install is
+`daemon/install*.sh`.)
+
+- **Python — Ruff** (`pyproject.toml`, `[tool.ruff]`): the linter **and** formatter
+  for all `*.py` (daemon, tools, firmware scripts). `.venv-dev/bin/ruff check .`
+  and `.venv-dev/bin/ruff format .`. The daemon stays stdlib-only — Ruff is dev
+  tooling, not a runtime dep.
+- **C++ — clang-format** (`.clang-format`): based on Google with the repo's
+  conventions (4-space indent, attached braces, left-aligned pointers, 100 cols).
+  **Generated data files are excluded via `.clang-format-ignore`** (`font_*.c`,
+  `logos.h`, `icons.h`, `splash_animations.h`) — clang-format rewraps their packed
+  arrays into a 100k-line diff otherwise. Never format them.
+- **C++ — clang-tidy** (`.clang-tidy`): needs a compile DB first —
+  `pio run -d firmware -e waveshare_amoled_18 -t compiledb` writes
+  `firmware/compile_commands.json` (gitignored). Then `.venv-dev/bin/clang-tidy
+  -p firmware firmware/src/<file>.cpp`. Checks are scoped to high-signal
+  `bugprone-*`/`performance-*`/analyzer families; the broad stylistic `misc-*`/
+  `modernize-*` families are off by design (they don't fit embedded C-style code).
+  Note clang-tidy parses with the clang frontend, so a few `clang-diagnostic-error`
+  lines for xtensa-gcc-specific constructs are expected — the GCC build is the
+  source of truth.
+
+**Enforcement (two layers, mirrors the sibling workspace projects):**
+
+- **Format on edit** — `.claude/hooks/format.sh` (a `PostToolUse` hook in
+  `.claude/settings.json`) runs ruff / clang-format on each file right after it's
+  edited. Non-blocking. Both files are committed (un-ignored in `.gitignore`).
+- **Lint on commit** — `hooks/pre-commit` runs `make lint` (`ruff check` +
+  `ruff format --check` + `clang-format --dry-run -Werror`), a check-only gate that
+  blocks the commit on any violation. Activated by `make setup` (sets
+  `core.hooksPath=hooks` — worktree-safe, no per-clone symlink). clang-tidy is
+  deliberately NOT in the gate (needs the compile DB, too slow) — run it manually.
+  `make format` applies all fixes in bulk.
 
 ## QA your own UI changes — don't ask the user
 

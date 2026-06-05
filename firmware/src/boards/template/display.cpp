@@ -1,7 +1,8 @@
-#include "../../hal/display_hal.h"
-#include "board.h"
 #include <Arduino.h>
 #include <Arduino_GFX_Library.h>
+
+#include "../../hal/display_hal.h"
+#include "board.h"
 
 // TODO: pick the right driver class from Arduino_GFX_Library (e.g.
 // Arduino_CO5300, Arduino_SH8601, Arduino_NV3041A). Most QSPI AMOLED
@@ -12,8 +13,7 @@ static Arduino_DataBus* bus = nullptr;
 // static Arduino_<YOUR_PANEL>* gfx = nullptr;
 
 void display_hal_init(void) {
-    bus = new Arduino_ESP32QSPI(
-        LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
+    bus = new Arduino_ESP32QSPI(LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
     // gfx = new Arduino_<YOUR_PANEL>(bus, LCD_RESET, 0, LCD_WIDTH, LCD_HEIGHT, ...);
 }
 
@@ -33,9 +33,12 @@ void display_hal_fill_screen(uint16_t color) {
     // gfx->fillScreen(color);
 }
 
-void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h,
-                             const uint16_t* pixels) {
-    (void)x; (void)y; (void)w; (void)h; (void)pixels;
+void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h, const uint16_t* pixels) {
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    (void)pixels;
     // gfx->draw16bitRGBBitmap(x, y, (uint16_t*)pixels, w, h);
     //
     // If your panel needs CPU rotation (no native MADCTL rotate), set

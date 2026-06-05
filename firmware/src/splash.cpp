@@ -1,27 +1,29 @@
 #include "splash.h"
+
+#include <Arduino.h>
+#include <esp_heap_caps.h>
+#include <string.h>
+
+#include "hal/board_caps.h"
 #include "splash_animations.h"
 #include "theme.h"
 #include "usage_rate.h"
-#include "hal/board_caps.h"
-#include <Arduino.h>
-#include <string.h>
-#include <esp_heap_caps.h>
 
 // Square canvas sized to the smaller display dimension. Each animation declares
 // its own width×height grid (clawd-tank SVG set: 128×128); render_frame() picks
 // a per-anim integer cell size to fit and centers the grid in the canvas,
 // leaving a black border rather than cropping.
-static int  canvas_dim = 480;       // recomputed in splash_init()
+static int canvas_dim = 480;  // recomputed in splash_init()
 
 // Background fallback when palette is missing
-#define COL_EMPTY    0x0000  // true black (matches THEME_BG)
+#define COL_EMPTY 0x0000  // true black (matches THEME_BG)
 
 #include "fonts.h"
 
-static lv_obj_t *splash_container = NULL;
-static lv_obj_t *canvas = NULL;
-static lv_obj_t *label_status = NULL;     // shown only when no animations loaded
-static uint16_t *canvas_buf = NULL;        // 480x480 RGB565 (PSRAM)
+static lv_obj_t* splash_container = NULL;
+static lv_obj_t* canvas = NULL;
+static lv_obj_t* label_status = NULL;  // shown only when no animations loaded
+static uint16_t* canvas_buf = NULL;    // 480x480 RGB565 (PSRAM)
 
 static uint16_t cur_anim = 0;
 static uint16_t cur_frame = 0;
@@ -37,7 +39,7 @@ static bool active = false;
 // Filled at init by mapping each animation's `group` tier name to an index.
 #define GROUP_COUNT 4
 #define GROUP_MAX   4
-static int8_t  group_lists[GROUP_COUNT][GROUP_MAX];
+static int8_t group_lists[GROUP_COUNT][GROUP_MAX];
 static uint8_t group_size[GROUP_COUNT] = {0};
 static uint8_t group_rotation[GROUP_COUNT] = {0};
 
@@ -51,16 +53,16 @@ static uint8_t group_rotation[GROUP_COUNT] = {0};
 // never does its own I2C read.
 #define LOW_BATT_PCT 15
 static const char* const LOW_BATT_ANIM_NAME = "idle low battery";
-static int8_t low_batt_anim = -1;     // index into splash_anims, or -1 if absent
-static int    batt_pct      = -1;     // last known battery %, -1 = unknown/no battery
-static bool   batt_charging = false;
+static int8_t low_batt_anim = -1;  // index into splash_anims, or -1 if absent
+static int batt_pct = -1;          // last known battery %, -1 = unknown/no battery
+static bool batt_charging = false;
 
-static void select_anim(int idx);     // defined below; used by splash_next()
+static void select_anim(int idx);  // defined below; used by splash_next()
 
 // Rate-bucket tier names indexed by usage-rate group. This is the single
 // firmware authority for tier name <-> index, so the order MUST match
 // usage_rate_group() (usage_rate.cpp: 0=idle, 1=normal, 2=active, 3=heavy).
-static const char* const RATE_TIERS[GROUP_COUNT] = { "idle", "normal", "active", "heavy" };
+static const char* const RATE_TIERS[GROUP_COUNT] = {"idle", "normal", "active", "heavy"};
 
 static int tier_index(const char* group) {
     if (!group) return -1;
@@ -86,13 +88,13 @@ static void resolve_group_lists(void) {
         }
         int g = tier_index(splash_anims[i].group);
         if (g < 0) {
-            Serial.printf("splash: '%s' has unknown group '%s' — skipped\n",
-                          splash_anims[i].name, splash_anims[i].group);
+            Serial.printf("splash: '%s' has unknown group '%s' — skipped\n", splash_anims[i].name,
+                          splash_anims[i].group);
             continue;
         }
         if (group_size[g] >= GROUP_MAX) {
-            Serial.printf("splash: group '%s' full (max %d) — '%s' skipped\n",
-                          RATE_TIERS[g], GROUP_MAX, splash_anims[i].name);
+            Serial.printf("splash: group '%s' full (max %d) — '%s' skipped\n", RATE_TIERS[g],
+                          GROUP_MAX, splash_anims[i].name);
             continue;
         }
         group_lists[g][group_size[g]++] = (int8_t)i;
@@ -102,14 +104,14 @@ static void resolve_group_lists(void) {
                       LOW_BATT_ANIM_NAME);
 }
 
-static uint16_t *row_buf = NULL;   // scratch row, sized to canvas_dim
+static uint16_t* row_buf = NULL;  // scratch row, sized to canvas_dim
 
-static void render_frame(const splash_anim_def_t *a, uint16_t frame_idx) {
+static void render_frame(const splash_anim_def_t* a, uint16_t frame_idx) {
     if (!row_buf || !canvas_buf || !a) return;
     const int gw = a->width, gh = a->height;
     if (gw <= 0 || gh <= 0) return;
-    const uint8_t *cells = a->frames[frame_idx];
-    const uint16_t *palette = a->palette;
+    const uint8_t* cells = a->frames[frame_idx];
+    const uint16_t* palette = a->palette;
 
     // Largest integer cell that fits the grid in the square canvas, centered.
     int cell = canvas_dim / (gw > gh ? gw : gh);
@@ -130,11 +132,11 @@ static void render_frame(const splash_anim_def_t *a, uint16_t frame_idx) {
         for (int gx = 0; gx < cols; gx++) {
             uint8_t code = cells[gy * gw + gx];
             uint16_t color = (palette && code < SPLASH_PALETTE_SIZE) ? palette[code] : COL_EMPTY;
-            uint16_t *p = &row_buf[gx * cell];
+            uint16_t* p = &row_buf[gx * cell];
             for (int i = 0; i < cell; i++) p[i] = color;
         }
         for (int dy = 0; dy < cell; dy++) {
-            uint16_t *dst = &canvas_buf[(size_t)(oy + gy * cell + dy) * canvas_dim + ox];
+            uint16_t* dst = &canvas_buf[(size_t)(oy + gy * cell + dy) * canvas_dim + ox];
             memcpy(dst, row_buf, (size_t)draw_w * 2);
         }
     }
@@ -150,10 +152,10 @@ static void show_placeholder() {
     if (label_status) lv_obj_clear_flag(label_status, LV_OBJ_FLAG_HIDDEN);
 }
 
-void splash_init(lv_obj_t *parent) {
+void splash_init(lv_obj_t* parent) {
     const BoardCaps& c = board_caps();
     int min_dim = (c.width < c.height) ? c.width : c.height;
-    canvas_dim = min_dim;            // square canvas fits the smaller dimension
+    canvas_dim = min_dim;  // square canvas fits the smaller dimension
 
 #ifdef BOARD_HAS_PSRAM
     const uint32_t canvas_caps = MALLOC_CAP_SPIRAM;
@@ -169,7 +171,7 @@ void splash_init(lv_obj_t *parent) {
 #endif
 
     canvas_buf = (uint16_t*)heap_caps_malloc((size_t)canvas_dim * canvas_dim * 2, canvas_caps);
-    row_buf    = (uint16_t*)heap_caps_malloc((size_t)canvas_dim * 2,              canvas_caps);
+    row_buf = (uint16_t*)heap_caps_malloc((size_t)canvas_dim * 2, canvas_caps);
     if (!canvas_buf || !row_buf) {
         Serial.println("splash: failed to alloc canvas buffer");
         return;
@@ -191,9 +193,9 @@ void splash_init(lv_obj_t *parent) {
     // Placeholder label (visible only when no animations are loaded)
     label_status = lv_label_create(splash_container);
     lv_label_set_text(label_status,
-        "no animations loaded\n\n"
-        "regenerate with\n"
-        "tools/svg_pipeline/build.sh");
+                      "no animations loaded\n\n"
+                      "regenerate with\n"
+                      "tools/svg_pipeline/build.sh");
     lv_obj_set_style_text_font(label_status, &font_styrene_28, 0);
     lv_obj_set_style_text_color(label_status, lv_color_hex(0xb0aea5), 0);
     lv_obj_set_style_text_align(label_status, LV_TEXT_ALIGN_CENTER, 0);
@@ -220,7 +222,7 @@ void splash_tick(void) {
         splash_pick_for_current_rate();
     }
 
-    const splash_anim_def_t *a = &splash_anims[cur_anim];
+    const splash_anim_def_t* a = &splash_anims[cur_anim];
     if (a->frame_count == 0) return;
 
     uint16_t hold = a->holds[cur_frame];
@@ -246,8 +248,8 @@ void splash_next(void) {
 
 static void select_anim(int idx) {
     uint32_t now = millis();
-    last_pick_ms = now;                       // refresh rotation timer either way
-    if ((uint16_t)idx == cur_anim) return;    // already showing — don't restart the clip
+    last_pick_ms = now;                     // refresh rotation timer either way
+    if ((uint16_t)idx == cur_anim) return;  // already showing — don't restart the clip
     cur_anim = (uint16_t)idx;
     cur_frame = 0;
     frame_started_ms = now;
@@ -268,7 +270,10 @@ void splash_pick_for_current_rate(void) {
     if (SPLASH_ANIM_COUNT == 0) return;
 
     // Condition override: a low battery preempts the usage-rate tier.
-    if (battery_is_low()) { select_anim(low_batt_anim); return; }
+    if (battery_is_low()) {
+        select_anim(low_batt_anim);
+        return;
+    }
 
     int g = usage_rate_group();
     if (g < 0 || g >= GROUP_COUNT) g = 0;
@@ -292,7 +297,9 @@ void splash_set_battery(int pct, bool charging) {
     if (active && now_low != was_low) splash_pick_for_current_rate();
 }
 
-bool splash_is_active(void) { return active; }
+bool splash_is_active(void) {
+    return active;
+}
 
 void splash_show(void) {
     splash_pick_for_current_rate();

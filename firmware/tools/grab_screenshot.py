@@ -5,7 +5,12 @@ Mirrors screenshot.sh's serial protocol but decodes RGB565LE → PNG in pure
 Python (zlib only), so it works on hosts without ffmpeg. Usage:
     grab_screenshot.py <out.png> [port]
 """
-import serial, sys, struct, zlib
+
+import struct
+import sys
+import zlib
+
+import serial
 
 out = sys.argv[1]
 port_path = sys.argv[2] if len(sys.argv) > 2 else "/dev/ttyACM0"
@@ -43,15 +48,23 @@ for y in range(h):
         r = (v >> 11) & 0x1F
         g = (v >> 5) & 0x3F
         b = v & 0x1F
-        rows += bytes((
-            (r * 255 + 15) // 31,
-            (g * 255 + 31) // 63,
-            (b * 255 + 15) // 31,
-        ))
+        rows += bytes(
+            (
+                (r * 255 + 15) // 31,
+                (g * 255 + 31) // 63,
+                (b * 255 + 15) // 31,
+            )
+        )
+
 
 def chunk(tag, payload):
-    return (struct.pack(">I", len(payload)) + tag + payload
-            + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF))
+    return (
+        struct.pack(">I", len(payload))
+        + tag
+        + payload
+        + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF)
+    )
+
 
 png = b"\x89PNG\r\n\x1a\n"
 png += chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))

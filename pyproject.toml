@@ -1,0 +1,13 @@
+# Python tooling config. Ruff is the project's linter + formatter (the
+# "biome for Python"): one tool replacing black/flake8/isort/pyupgrade.
+# Run from the repo root: `.venv-dev/bin/ruff check .` and
+# `.venv-dev/bin/ruff format .`. See AGENTS.md "Dev tooling".
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = [".venv-dev", "daemon/.venv", "tools/node_modules", "firmware/.pio"]
+
+[tool.ruff.lint]
+# Conservative baseline: pyflakes (F) + pycodestyle (E) + import sort (I)
+# + pyupgrade (UP) + bugbear (B) + comprehensions (C4) + flake8-simplify (SIM).
+select = ["E", "F", "I", "UP", "B", "C4", "SIM"]

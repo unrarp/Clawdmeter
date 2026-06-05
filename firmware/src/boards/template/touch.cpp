@@ -1,7 +1,8 @@
-#include "../../hal/touch_hal.h"
-#include "board.h"
 #include <Arduino.h>
 #include <Wire.h>
+
+#include "../../hal/touch_hal.h"
+#include "board.h"
 
 // TODO: replace the body with a driver for your controller. Two patterns:
 //   1. A library (SensorLib's CSTxxx, TAMC_GT911, etc.) — add to lib_deps
@@ -12,8 +13,8 @@
 // Whichever you pick, touch_hal_read() must complete in well under 5 ms
 // (a single I2C burst is fine) so it doesn't drop frames.
 
-static volatile bool     touch_data_ready = false;
-static volatile bool     touch_pressed = false;
+static volatile bool touch_data_ready = false;
+static volatile bool touch_pressed = false;
 static volatile uint16_t touch_x = 0;
 static volatile uint16_t touch_y = 0;
 

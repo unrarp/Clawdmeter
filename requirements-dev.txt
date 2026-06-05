@@ -1,0 +1,7 @@
+# Dev-tooling — lint + format only (NOT broker runtime; the daemon is stdlib-only).
+# Pinned so every contributor produces identical formatting. clang-format output
+# in particular drifts between releases, so the pin is load-bearing, not cosmetic.
+# Installed into .venv-dev by `make setup`. See AGENTS.md "Lint / format".
+ruff==0.15.16
+clang-format==22.1.5
+clang-tidy==22.1.0.1
