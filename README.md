@@ -2,11 +2,11 @@
 
 A small ESP32 dashboard I made for my desk to keep an eye on my Claude Code (and Codex) usage at a glance.
 
-It runs on a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786) plus a few other boards (see [Hardware](#hardware)). The device connects to your WiFi network and fetches usage data **directly** from the Anthropic and Codex APIs over TLS, refreshing roughly every 60 seconds. The host runs a small **token broker** that hands the device its API credentials on first boot and whenever a provider returns 401 — otherwise the laptop can be off. The splash screen plays pixel-art Clawd animations that get busier as your usage rate climbs.
+It runs on a [Waveshare ESP32-S3-Touch-AMOLED-1.8](https://thepihut.com/products/esp32-s3-development-board-with-1-8-amoled-touch-display-368-x-448?variant=53995206771073) — plus the original 2.16″ Waveshare and its ESP32-C6 sibling (see [Hardware](#hardware)). The device connects to your WiFi network and fetches usage data **directly** from the Anthropic and Codex APIs over TLS, refreshing roughly every 60 seconds. The host runs a small **token broker** that hands the device its API credentials on first boot and whenever a provider returns 401 — otherwise the laptop can be off. The splash screen plays pixel-art Clawd animations that get busier as your usage rate climbs.
 
-|              Usage meter              |              Clawd animation screen              |
-| :-----------------------------------: | :----------------------------------------------: |
-| ![Usage meter](assets/demo.jpeg) | ![Clawd animation screen](assets/demo.gif) |
+<p align="center">
+  <img src="assets/demo.gif" alt="Clawd animation screen" width="220">
+</p>
 
 The Clawd animations come from the [clawd-tank](https://github.com/marciogranzotto/clawd-tank) SVG set by [@marciogranzotto](https://github.com/marciogranzotto) (MIT). A 4-stage pipeline under `tools/svg_pipeline/` renders and converts them to the C arrays the firmware compiles in.
 
@@ -17,7 +17,7 @@ The device boots into the splash and stays there until you press the middle (PWR
 |              Splash               |              Claude             |              Codex              |              WiFi               |
 | :-------------------------------: | :-----------------------------: | :-----------------------------: | :-----------------------------: |
 | ![Splash](screenshots/amoled_18/splash.png) | ![Claude](screenshots/amoled_18/usage.png) | ![Codex](screenshots/amoled_18/codex.png) | ![WiFi](screenshots/amoled_18/wifi.png) |
-|   Splash; touch-toggle anytime    | Claude session & weekly utilization | Codex session & weekly utilization | Connection diagnostics (SSID / IP / RSSI / data age) |
+|   Splash; touch-toggle anytime    | Claude session & weekly utilization | Codex session & weekly utilization | Connection diagnostics (SSID / IP / Claude & Codex status / data age) |
 
 While the splash is up, the middle button cycles animations instead of screens. The firmware also auto-rotates every 20 s within the current usage-rate group, so a long stretch on the splash isn't just one Clawd on loop.
 
@@ -25,9 +25,9 @@ While the splash is up, the middle button cycles animations instead of screens. 
 
 Boards supported out of the box:
 
-- [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786)
-- [Waveshare ESP32-C6-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-c6-touch-amoled-2.16.htm?&aff_id=149786) 
-- [Waveshare ESP32-S3-Touch-AMOLED-1.8](https://www.waveshare.com/esp32-s3-touch-amoled-1.8.htm?&aff_id=149786)
+- [Waveshare ESP32-S3-Touch-AMOLED-1.8](https://www.waveshare.com/esp32-s3-touch-amoled-1.8.htm?&aff_id=149786) — also stocked by [The Pi Hut](https://thepihut.com/products/esp32-s3-development-board-with-1-8-amoled-touch-display-368-x-448?variant=53995206771073) (368×448, the board the screenshots in this README are from)
+- [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786) — the original port (480×480 square)
+- [Waveshare ESP32-C6-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-c6-touch-amoled-2.16.htm?&aff_id=149786) — ESP32-C6 variant of the 2.16″
 
 > Please check if a pull request exists for your alternative hardware port before opening a new one, providing QA feedback and testing on the same hardware is more valuable than duplicate pull requests.
 
@@ -41,24 +41,26 @@ Boards supported out of the box:
 - Claude Code with an active subscription (and/or the Codex CLI signed in, if you want the Codex screen)
 - The device and the host machine must be on the same WiFi network
 
-## macOS installation
+## Configure the firmware
 
-The macOS host pieces — Python daemon, LaunchAgent, and flash helper — were ported by [Chris Davidson (@lorddavidson)](https://github.com/lorddavidson). Thanks Chris!
-
-### Configure WiFi credentials
-
-Before flashing, copy `firmware/src/net_config.example.h` to `firmware/src/net_config.h` and fill in your network details:
+Before flashing, copy `firmware/src/net_config.example.h` to `firmware/src/net_config.h` and fill in your network details (gitignored — your real credentials are never committed):
 
 ```c
 #define WIFI_SSID      "YourNetwork"
 #define WIFI_PASSWORD  "YourPassword"
-#define DAEMON_HOST    "my-macbook.local"   // your machine's mDNS hostname
+#define DAEMON_HOST    "my-host.local"   // your machine's mDNS hostname
 #define DAEMON_PORT    8080
 #define BROKER_KEY     "a-long-random-secret"  // must match CLAWDMETER_BROKER_KEY on the broker
 #define FETCH_INTERVAL_MS  60000
 ```
 
 `DAEMON_HOST` is your machine's mDNS hostname (typically `<computer-name>.local`) — no static IP needed. `BROKER_KEY` is a shared secret you choose; set `CLAWDMETER_BROKER_KEY` to the same value in the broker's environment.
+
+Then follow the steps for your OS below — flashing and the token broker differ between macOS and Linux.
+
+## macOS installation
+
+The macOS host pieces — Python daemon, LaunchAgent, and flash helper — were ported by [Chris Davidson (@lorddavidson)](https://github.com/lorddavidson). Thanks Chris!
 
 ### Flash the firmware
 
@@ -89,21 +91,6 @@ launchctl load -w ~/Library/LaunchAgents/com.user.clawdmeter-broker.plist      #
 ```
 
 ## Linux installation
-
-### Configure WiFi credentials
-
-Before flashing, copy `firmware/src/net_config.example.h` to `firmware/src/net_config.h` and fill in your network details:
-
-```c
-#define WIFI_SSID      "YourNetwork"
-#define WIFI_PASSWORD  "YourPassword"
-#define DAEMON_HOST    "my-laptop.local"   // your machine's mDNS hostname
-#define DAEMON_PORT    8080
-#define BROKER_KEY     "a-long-random-secret"  // must match CLAWDMETER_BROKER_KEY on the broker
-#define FETCH_INTERVAL_MS  60000
-```
-
-`DAEMON_HOST` is your machine's mDNS hostname (typically `<computer-name>.local`) — no static IP needed. `BROKER_KEY` is a shared secret you choose; set `CLAWDMETER_BROKER_KEY` to the same value in the broker's environment.
 
 ### Flash the firmware
 
