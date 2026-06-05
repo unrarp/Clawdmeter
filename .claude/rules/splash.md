@@ -2,6 +2,8 @@
 paths:
   - "firmware/src/splash.cpp"
   - "firmware/src/splash.h"
+  - "firmware/src/usage_rate.cpp"
+  - "firmware/src/usage_rate.h"
   - "tools/svg_pipeline/**"
   - "tools/svg_anim_data/**"
   - "firmware/scripts/gen_splash.py"
@@ -37,9 +39,24 @@ paths:
   Rasterize the whole fixed wrapper (e.g. 288×288) and scale that. See
   `tools/svg_pipeline/make_wrappers.py` + `frames_to_data.py` (`on_panel`).
 
+- **Animation rate tier is per-provider: feed each provider's `session_pct` into its
+  own ring and take the max group — never collapse to the max-level provider first.**
+  `usage_rate_sample(prov, pct)` keeps a ring per `PROV_*`; `usage_rate_group()`
+  returns the max tier across them (`usage_rate.cpp`). Collapsing to `max(session_pct)`
+  then tracking that one number's rate lets a flat-but-high provider (Codex idle at 55%)
+  mask a climbing one (Claude) → splash stuck on idle. Two more load-bearing constraints:
+  (1) the upstream 5h-utilization header is **whole-percent quantized**, so the window
+  (`RING_SIZE`×~60s ≈ 9 min) must stay ≤~10 min — a single 1% crossing must clear Normal
+  (1%÷9min ≈ 0.11); **widen the window, don't lower thresholds**. (2) A provider that
+  stops reporting must age out to idle (`millis() - newest > 3×MIN_WINDOW` in `group_for`)
+  or its ring freezes at the last tier. → see
+  docs/decisions/2026-06-05-usage-rate-per-provider-tiering.md
+
 ## Related decisions
 
 - `2026-06-03-splash-animations-build-artifact` — gitignored artifact, binary format,
   pre-build hook.
+- `2026-06-05-usage-rate-per-provider-tiering` — per-provider rate rings, the
+  quantization/window-length bound, and why thresholds weren't lowered.
 - `2026-06-05-condition-driven-splash-animations` — name-keyed condition clips and the
   exclusion points they need.

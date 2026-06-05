@@ -195,15 +195,6 @@ static net_state_t last_net_state = NET_DISCONNECTED;
 // Per-provider WiFi-page verdict latch (USAGE_OFFLINE == 0 → zero-init is correct).
 static usage_health_t last_health[PROVIDER_COUNT] = {};
 
-static float max_present_session_pct(const UsageData& u) {
-    float m = -1.0f;
-    for (int i = 0; i < PROVIDER_COUNT; i++) {
-        const ProviderUsage& p = u.providers[i];
-        if (p.present && p.session_pct >= 0 && p.session_pct > m) m = p.session_pct;
-    }
-    return m < 0 ? 0.0f : m;  // idle default when no present provider has data
-}
-
 // True if any substantive usage/state field differs. Deliberately ignores
 // *_reset_mins — those count down every poll, so including them would reset the
 // idle timer continuously and defeat auto-power-off.
@@ -313,12 +304,16 @@ void loop() {
             if (usage_changed(usage, fresh)) idle_note_activity();
             usage = fresh;
             int g_before = usage_rate_group();
-            float max_pct = max_present_session_pct(usage);
-            usage_rate_sample(max_pct);
+            // Feed each present provider's session % into its own rate ring; the
+            // splash tiers off the fastest-climbing provider, not the highest-level
+            // one (previously, a flat-but-high provider would mask a climbing one).
+            for (int i = 0; i < PROVIDER_COUNT; i++) {
+                const ProviderUsage& p = usage.providers[i];
+                if (p.present && p.session_pct >= 0) usage_rate_sample(i, p.session_pct);
+            }
             int g_after = usage_rate_group();
             if (g_after != g_before) {
-                Serial.printf("usage rate: group %d -> %d (s=%.2f%%)\n", g_before, g_after,
-                              max_pct);
+                Serial.printf("usage rate: group %d -> %d\n", g_before, g_after);
                 if (splash_is_active()) splash_pick_for_current_rate();
             }
             ui_update(&usage);
