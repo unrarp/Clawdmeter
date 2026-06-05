@@ -180,7 +180,10 @@ void setup() {
     for (int i = 0; i < PROVIDER_COUNT; i++) h0[i] = net_provider_health(i);
     ui_update_wifi_status(net_get_state(), net_get_ssid(), net_get_ip(),
                           net_last_update_ms(), h0);
-    ui_update_battery(power_hal_battery_pct(), power_hal_is_charging());
+    int  boot_pct      = power_hal_battery_pct();
+    bool boot_charging = power_hal_is_charging();
+    ui_update_battery(boot_pct, boot_charging);
+    splash_set_battery(boot_pct, boot_charging);   // seed so a low-battery boot opens on the right clip
     ui_show_screen(SCREEN_SPLASH);
 
     Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on WiFi...\n",
@@ -289,6 +292,7 @@ void loop() {
         last_pct = pct;
         last_charging = charging;
         ui_update_battery(pct, charging);
+        splash_set_battery(pct, charging);
     }
 
     check_serial_cmd();

@@ -21,6 +21,12 @@ void splash_hide(void);
 // trigger a re-pick when the rate group changes mid-display.
 void splash_pick_for_current_rate(void);
 
+// Feed the latest battery state in (percent 0..100 or -1, charging flag). Below
+// a threshold (and not charging) the splash shows a dedicated low-battery clip
+// instead of the usual rate-driven pick, re-picking immediately when the
+// condition flips. Call whenever the battery reading changes.
+void splash_set_battery(int pct, bool charging);
+
 // True when splash is currently rendering (used to gate re-picks).
 bool splash_is_active(void);
 

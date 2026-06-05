@@ -41,6 +41,22 @@ static int8_t  group_lists[GROUP_COUNT][GROUP_MAX];
 static uint8_t group_size[GROUP_COUNT] = {0};
 static uint8_t group_rotation[GROUP_COUNT] = {0};
 
+// Condition-driven animation: the low-battery clip is NOT part of the random
+// rate-tier rotation — it's shown only while the battery is at/below
+// LOW_BATT_PCT and not charging. It's identified by name in the generated
+// catalog (excluded from the tier lists in resolve_group_lists); if it's ever
+// renamed or dropped from the set, low_batt_anim stays -1 and the override
+// simply never fires. Battery state is pushed in from main via
+// splash_set_battery() (which already polls the PMU each loop) so the picker
+// never does its own I2C read.
+#define LOW_BATT_PCT 15
+static const char* const LOW_BATT_ANIM_NAME = "idle low battery";
+static int8_t low_batt_anim = -1;     // index into splash_anims, or -1 if absent
+static int    batt_pct      = -1;     // last known battery %, -1 = unknown/no battery
+static bool   batt_charging = false;
+
+static void select_anim(int idx);     // defined below; used by splash_next()
+
 // Rate-bucket tier names indexed by usage-rate group. This is the single
 // firmware authority for tier name <-> index, so the order MUST match
 // usage_rate_group() (usage_rate.cpp: 0=idle, 1=normal, 2=active, 3=heavy).
@@ -54,6 +70,7 @@ static int tier_index(const char* group) {
 }
 
 static void resolve_group_lists(void) {
+    low_batt_anim = -1;
     for (int g = 0; g < GROUP_COUNT; g++) {
         group_size[g] = 0;
         for (int s = 0; s < GROUP_MAX; s++) {
@@ -61,6 +78,12 @@ static void resolve_group_lists(void) {
         }
     }
     for (int i = 0; i < SPLASH_ANIM_COUNT; i++) {
+        // The low-battery clip is condition-driven, not part of the rate
+        // rotation — record its index and keep it out of the tier lists.
+        if (strcmp(splash_anims[i].name, LOW_BATT_ANIM_NAME) == 0) {
+            low_batt_anim = (int8_t)i;
+            continue;
+        }
         int g = tier_index(splash_anims[i].group);
         if (g < 0) {
             Serial.printf("splash: '%s' has unknown group '%s' — skipped\n",
@@ -74,6 +97,9 @@ static void resolve_group_lists(void) {
         }
         group_lists[g][group_size[g]++] = (int8_t)i;
     }
+    if (low_batt_anim < 0)
+        Serial.printf("splash: low-battery clip '%s' not in set — battery override disabled\n",
+                      LOW_BATT_ANIM_NAME);
 }
 
 static uint16_t *row_buf = NULL;   // scratch row, sized to canvas_dim
@@ -207,17 +233,43 @@ void splash_tick(void) {
 
 void splash_next(void) {
     if (SPLASH_ANIM_COUNT == 0) return;
-    cur_anim = (cur_anim + 1) % SPLASH_ANIM_COUNT;
+    // Step to the next catalog entry, skipping the condition-driven low-battery
+    // clip so a manual cycle never lands on it out of context.
+    int next = cur_anim;
+    for (int n = 0; n < SPLASH_ANIM_COUNT; n++) {
+        next = (next + 1) % SPLASH_ANIM_COUNT;
+        if (next != low_batt_anim) break;
+    }
+    select_anim(next);
+    Serial.printf("splash: -> %s\n", splash_anims[cur_anim].name);
+}
+
+static void select_anim(int idx) {
+    uint32_t now = millis();
+    last_pick_ms = now;                       // refresh rotation timer either way
+    if ((uint16_t)idx == cur_anim) return;    // already showing — don't restart the clip
+    cur_anim = (uint16_t)idx;
     cur_frame = 0;
-    frame_started_ms = millis();
-    last_pick_ms = frame_started_ms;
-    const splash_anim_def_t *a = &splash_anims[cur_anim];
-    render_frame(a, 0);
-    Serial.printf("splash: -> %s\n", a->name);
+    frame_started_ms = now;
+    render_frame(&splash_anims[cur_anim], 0);
+}
+
+// True when the dedicated low-battery animation should override the rate pick:
+// the clip exists, the board has a real battery, it's discharging, and the
+// charge is at/below the threshold. Uses the cached PMU reading from
+// splash_set_battery() — no I2C here.
+static bool battery_is_low(void) {
+    if (low_batt_anim < 0 || !board_caps().has_battery) return false;
+    if (batt_charging) return false;
+    return batt_pct >= 0 && batt_pct <= LOW_BATT_PCT;
 }
 
 void splash_pick_for_current_rate(void) {
     if (SPLASH_ANIM_COUNT == 0) return;
+
+    // Condition override: a low battery preempts the usage-rate tier.
+    if (battery_is_low()) { select_anim(low_batt_anim); return; }
+
     int g = usage_rate_group();
     if (g < 0 || g >= GROUP_COUNT) g = 0;
     if (group_size[g] == 0) return;
@@ -227,11 +279,17 @@ void splash_pick_for_current_rate(void) {
     int8_t idx = group_lists[g][slot];
     if (idx < 0) return;
 
-    cur_anim = (uint16_t)idx;
-    cur_frame = 0;
-    frame_started_ms = millis();
-    last_pick_ms = frame_started_ms;
-    render_frame(&splash_anims[cur_anim], 0);
+    select_anim(idx);
+}
+
+void splash_set_battery(int pct, bool charging) {
+    bool was_low = battery_is_low();
+    batt_pct = pct;
+    batt_charging = charging;
+    bool now_low = battery_is_low();
+    // Re-pick immediately when the low-battery condition flips while showing,
+    // so the override engages/clears without waiting for the rotation timer.
+    if (active && now_low != was_low) splash_pick_for_current_rate();
 }
 
 bool splash_is_active(void) { return active; }

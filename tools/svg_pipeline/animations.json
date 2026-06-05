@@ -10,15 +10,15 @@
   "animations": [
     { "svg": "clawd-idle-living",        "name": "idle living",        "group": "idle"   },
     { "svg": "clawd-sleeping",           "name": "sleeping",           "group": "idle"   },
-    { "svg": "clawd-happy",              "name": "happy",              "group": "idle"   },
+    { "svg": "clawd-idle-low-battery",   "name": "idle low battery",   "group": "idle"   },
     { "svg": "clawd-working-typing",     "name": "working typing",     "group": "normal" },
     { "svg": "clawd-working-thinking",   "name": "working thinking",   "group": "normal" },
     { "svg": "clawd-working-debugger",   "name": "working debugger",   "group": "normal" },
-    { "svg": "clawd-working-building",   "name": "working building",   "group": "active" },
-    { "svg": "clawd-working-sweeping",   "name": "working sweeping",   "group": "active" },
+    { "svg": "clawd-working-carrying",   "name": "working carrying",   "group": "active" },
     { "svg": "clawd-grooving",           "name": "grooving",           "group": "active" },
+    { "svg": "clawd-working-conducting", "name": "working conducting", "group": "active" },
     { "svg": "clawd-working-juggling",   "name": "working juggling",   "group": "heavy"  },
-    { "svg": "clawd-working-overheated", "name": "working overheated", "group": "heavy"  },
-    { "svg": "clawd-eureka",             "name": "eureka",             "group": "heavy"  }
+    { "svg": "clawd-working-builder",    "name": "working builder",    "group": "heavy"  },
+    { "svg": "clawd-working-wizard",     "name": "working wizard",     "group": "heavy"  }
   ]
 }
