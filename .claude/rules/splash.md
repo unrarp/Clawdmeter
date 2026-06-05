@@ -39,6 +39,29 @@ paths:
   Rasterize the whole fixed wrapper (e.g. 288×288) and scale that. See
   `tools/svg_pipeline/make_wrappers.py` + `frames_to_data.py` (`on_panel`).
 
+- **The tight-viewBox bbox probe (cairosvg) ignores a CSS-class `opacity: 0`; the
+  capture (Chromium) honors it.** Decorations hidden at rest render *opaque* in the
+  probe, inflating the viewBox so the creature is framed small and off-center, while
+  the captured frames correctly hide them (seen: wizard `magic-star`, grooving
+  `note-left/right`). Strip such elements from the probe only via `animations.json`
+  `bbox_strip` (CSS class names) → `make_wrappers.py::strip_classes`, applied to the
+  probe text but **not** the wrapper, so they still animate. Default path probes the
+  on-disk SVG via `url=`, so untouched clips stay byte-identical.
+
+- **Each bin captures only a fixed `period_ms` (1200 ms) slice of the clip's CSS
+  timeline starting at t=0 — not the whole animation.** A key moment that lands later
+  never appears (seen: builder's sweat at ~3.3 s of a 6 s loop, thinking's 3rd dot at
+  1.22 s, conducting's stream once its staggered pixels launch ~1.8 s). Shift the
+  window with `animations.json` `start_ms`: `capture_frames.mjs` sets
+  `currentTime = start_ms + (i/N)*period`. WAAPI wraps per-iteration, so any offset
+  (even > the clip's own duration) is valid.
+
+- **Clips are framed independently (tight viewBox + `xMidYMid`), so baselines do NOT
+  line up across the set.** To drop a clip onto the shared ground line (~y112 of 128)
+  without rescaling, use `animations.json` `y_offset` (user units, positive = down);
+  `make_wrappers.py` subtracts it from the viewBox origin `ny`, which translates
+  content down without changing scale (seen: grooving, typing).
+
 - **Animation rate tier is per-provider: feed each provider's `session_pct` into its
   own ring and take the max group — never collapse to the max-level provider first.**
   `usage_rate_sample(prov, pct)` keeps a ring per `PROV_*`; `usage_rate_group()`

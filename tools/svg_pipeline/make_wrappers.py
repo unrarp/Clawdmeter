@@ -37,9 +37,38 @@ R = 512  # bbox probe resolution
 MARGIN = 0.10  # fraction of content size as padding
 
 
-def tight_viewbox(svg_path, orig_vb):
-    """Compute a tight viewBox (user units) from the rendered content bbox."""
-    png = cairosvg.svg2png(url=svg_path, output_width=R, output_height=R, background_color=None)
+def strip_classes(txt, classes):
+    """Remove elements carrying any of the given CSS classes (bbox-probe only).
+
+    cairosvg ignores a CSS-class `opacity: 0`, so decorative overlays that are
+    hidden at rest (e.g. the wizard's flying magic stars) get rendered opaque
+    and inflate the probed bbox — shrinking and off-centering the framed
+    creature. Stripping them for the probe — never for the captured wrapper —
+    keeps the framing on the creature. See animations.json `bbox_strip`.
+    """
+    for cls in classes:
+        head = r'<(\w+)\b[^>]*\bclass\s*=\s*"[^"]*\b' + re.escape(cls) + r'\b[^"]*"[^>]*'
+        txt = re.sub(head + r"/>", "", txt)  # self-closing (e.g. <use .../>)
+        txt = re.sub(head + r">.*?</\1>", "", txt, flags=re.S)  # paired <g>…</g>
+    return txt
+
+
+def tight_viewbox(svg_path, orig_vb, svg_text=None):
+    """Compute a tight viewBox (user units) from the rendered content bbox.
+
+    When svg_text is given (a `bbox_strip`-modified copy) it is probed instead
+    of the file on disk; otherwise the original on-disk SVG is used verbatim so
+    unaffected animations keep producing byte-identical data.
+    """
+    if svg_text is not None:
+        png = cairosvg.svg2png(
+            bytestring=svg_text.encode("utf-8"),
+            output_width=R,
+            output_height=R,
+            background_color=None,
+        )
+    else:
+        png = cairosvg.svg2png(url=svg_path, output_width=R, output_height=R, background_color=None)
     im = Image.open(io.BytesIO(png)).convert("RGBA")
     bb = im.getbbox()
     ox, oy, ow, oh = orig_vb
@@ -60,11 +89,16 @@ def parse_vb(txt):
     return tuple(float(v) for v in m.group(1).replace(",", " ").split())
 
 
-def inline_svg(svg_path):
+def inline_svg(svg_path, bbox_strip=(), y_offset=0.0):
     with open(svg_path, encoding="utf-8") as _f:
         txt = _f.read()
     orig = parse_vb(txt)
-    nx, ny, nw, nh = tight_viewbox(svg_path, orig)
+    probe_text = strip_classes(txt, bbox_strip) if bbox_strip else None
+    nx, ny, nw, nh = tight_viewbox(svg_path, orig, svg_text=probe_text)
+    # Shift the framing without rescaling: lowering the viewBox origin moves the
+    # creature DOWN in the (xMidYMid) frame, so a positive y_offset (user units)
+    # drops the baseline to line up with the rest of the set. See animations.json.
+    ny -= y_offset
 
     # rewrite the opening <svg ...> tag: tight viewBox, fill container, keep all defs/styles
     def fix(m):
@@ -86,7 +120,7 @@ for anim in cfg["animations"]:
     name = svg_name.replace("clawd-", "")  # e.g. "idle-living"
     svg_path = os.path.join(SVG_DIR, f"{svg_name}.svg")
     try:
-        svg = inline_svg(svg_path)
+        svg = inline_svg(svg_path, anim.get("bbox_strip", ()), float(anim.get("y_offset", 0.0)))
     except Exception as e:
         raise SystemExit(f"ERROR inlining {svg_name}: {e}") from e
 
@@ -102,7 +136,9 @@ for anim in cfg["animations"]:
     html_path = os.path.join(CACHE_DIR, f"{name}.html")
     with open(html_path, "w", encoding="utf-8") as _f:
         _f.write(html)
-    manifest_items.append({"name": name, "html": html_path})
+    manifest_items.append(
+        {"name": name, "html": html_path, "start_ms": int(anim.get("start_ms", 0))}
+    )
     print(f"wrapper  {name}")
 
 manifest = {

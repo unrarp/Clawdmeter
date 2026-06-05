@@ -1,5 +1,5 @@
 {
-  "_comment": "Active splash animation set + render params. Single source of truth for the pipeline (make_wrappers.py -> capture_frames.mjs -> frames_to_data.py -> gen_splash_header.py). 'group' is the authoritative rate-bucket tier — one of \"idle\", \"normal\", \"active\", \"heavy\" (matching the usage-rate tiers in firmware/src/usage_rate.cpp). It is propagated through manifest.json into splash_anim_def_t.group in the generated header; splash.cpp maps it to a rate-group index via RATE_TIERS. Source SVGs vendored in ./svg/ (MIT, marciogranzotto/clawd-tank).",
+  "_comment": "Active splash animation set + render params. Single source of truth for the pipeline (make_wrappers.py -> capture_frames.mjs -> frames_to_data.py -> gen_splash_header.py). 'group' is the authoritative rate-bucket tier — one of \"idle\", \"normal\", \"active\", \"heavy\" (matching the usage-rate tiers in firmware/src/usage_rate.cpp). It is propagated through manifest.json into splash_anim_def_t.group in the generated header; splash.cpp maps it to a rate-group index via RATE_TIERS. Source SVGs vendored in ./svg/ (MIT, marciogranzotto/clawd-tank). Optional per-animation fields: 'start_ms' (default 0) offsets the capture window into the CSS timeline so a clip can begin further into a long animation (e.g. builder starts at its sweat phase); 'bbox_strip' (list of CSS class names) removes elements from the tight-viewBox probe only — cairosvg ignores class 'opacity: 0', so decorative overlays hidden at rest (e.g. the wizard's flying magic stars) otherwise inflate the bbox and shrink the framed creature; 'y_offset' (user units, positive = down) lowers the viewBox origin to drop the framed creature without rescaling, used to line a clip's baseline up with the rest of the set.",
   "params": {
     "grid": 128,
     "palette": 24,
@@ -11,14 +11,14 @@
     { "svg": "clawd-idle-living",        "name": "idle living",        "group": "idle"   },
     { "svg": "clawd-sleeping",           "name": "sleeping",           "group": "idle"   },
     { "svg": "clawd-idle-low-battery",   "name": "idle low battery",   "group": "idle"   },
-    { "svg": "clawd-working-typing",     "name": "working typing",     "group": "normal" },
-    { "svg": "clawd-working-thinking",   "name": "working thinking",   "group": "normal" },
+    { "svg": "clawd-working-typing",     "name": "working typing",     "group": "normal", "y_offset": 4.8 },
+    { "svg": "clawd-working-thinking",   "name": "working thinking",   "group": "normal", "start_ms": 500 },
     { "svg": "clawd-working-debugger",   "name": "working debugger",   "group": "normal" },
     { "svg": "clawd-working-carrying",   "name": "working carrying",   "group": "active" },
-    { "svg": "clawd-grooving",           "name": "grooving",           "group": "active" },
-    { "svg": "clawd-working-conducting", "name": "working conducting", "group": "active" },
+    { "svg": "clawd-grooving",           "name": "grooving",           "group": "active", "bbox_strip": ["note-left", "note-right"], "y_offset": 2.2 },
+    { "svg": "clawd-working-conducting", "name": "working conducting", "group": "active", "start_ms": 1800 },
     { "svg": "clawd-working-juggling",   "name": "working juggling",   "group": "heavy"  },
-    { "svg": "clawd-working-builder",    "name": "working builder",    "group": "heavy"  },
-    { "svg": "clawd-working-wizard",     "name": "working wizard",     "group": "heavy"  }
+    { "svg": "clawd-working-builder",    "name": "working builder",    "group": "heavy",  "start_ms": 3300 },
+    { "svg": "clawd-working-wizard",     "name": "working wizard",     "group": "heavy",  "bbox_strip": ["magic-star"] }
   ]
 }

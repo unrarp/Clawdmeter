@@ -88,8 +88,9 @@ for (const item of man.items) {
   await page.goto('file://' + item.html);
   await page.waitForTimeout(200);
   const box = page.locator('#box');
+  const start = item.start_ms || 0;  // offset into the CSS timeline (animations.json start_ms)
   for (let i = 0; i < N; i++) {
-    const tms = (i / N) * T;
+    const tms = start + (i / N) * T;
     await page.evaluate((tms) => {
       for (const a of document.getAnimations()) {
         try { a.pause(); a.currentTime = tms; } catch (e) {}
