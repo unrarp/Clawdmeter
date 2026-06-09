@@ -1,6 +1,6 @@
 # Project context
 
-ESP32-S3 firmware for a desk-side Claude Code usage monitor. Each supported
+ESP32-S3 / C6 firmware for a desk-side Claude Code usage monitor. Each supported
 board lives in its own `firmware/src/boards/<name>/` folder and is selected
 via PlatformIO's `build_src_filter`. Adding a board means dropping in a new
 folder + a new `[env:...]` block — `main.cpp`, `ui.cpp`, and `splash.cpp`
@@ -12,26 +12,11 @@ Three reference ports today:
 - `boards/waveshare_amoled_18/` — Waveshare ESP32-S3-Touch-AMOLED-1.8 (SH8601, 368×448 portrait, FT3168 touch, XCA9554 IO expander). Build env: `waveshare_amoled_18`.
 - `boards/waveshare_amoled_216_c6/` — Waveshare ESP32-C6-Touch-AMOLED-2.16 (same display as 216, ESP32-C6 MCU). Build env: `waveshare_amoled_216_c6`.
 
-The shared code calls a small HAL (`firmware/src/hal/`) that each board implements: display, touch, input, power, IMU. Optional features are guarded by `BoardCaps` (runtime) and `BOARD_HAS_*` (compile-time) rather than `#ifdef BOARD_*`.
-
-The device fetches usage **directly from both provider APIs over TLS** (~60 s interval) and writes each provider's mapped result straight into a `ProviderUsage` for the UI (`firmware/src/net.cpp`, provider-table driven — no wire-JSON layer); the host runs a small **token broker** (`daemon/token_broker.py`) the device queries only to (re)fetch credentials — on first boot (empty NVS) and on a provider 401/403. This file is for future Claude Code sessions to bootstrap quickly. Read this first.
+The device fetches usage **directly from each provider's API over TLS** (~60 s); a host **token broker** (`daemon/token_broker.py`) vends only credentials, on first boot and after a 401/403. This file is for future Claude Code sessions to bootstrap quickly — read it first.
 
 ## Architecture
 
-Shared code (`main.cpp`, `ui.cpp`, `splash.cpp`, `net.cpp`, `data.h`) calls a small
-HAL (`firmware/src/hal/`) that each `boards/<name>/` folder implements (`board.h`,
-`board_init.cpp` — runs before display init —, the per-HAL `.cpp`s, `caps.cpp`).
-`build_src_filter` compiles shared code + one board folder per env. **The HAL boundary
-is load-bearing — no `#ifdef BOARD_*` in shared code; add a `BoardCaps` field or a
-per-board file instead.** Per-board critical pins, I2C addresses, and bring-up order
-live in [`.claude/rules/boards.md`](.claude/rules/boards.md) (auto-loads when editing
-`firmware/src/boards/**`). Walk-through and the interfaces a port must implement:
-[`docs/porting/`](docs/porting/).
-
-Adding a usage **provider** (alongside Claude/Codex) is likewise table-driven —
-one `PROV_*` enum entry + a row in each parallel table (`net.cpp` `PROVIDERS[]` +
-a `fetch_*()`, `ui.cpp` `UI_PROVIDERS[]`, the broker key): see
-[`docs/porting/adding-a-provider.md`](docs/porting/adding-a-provider.md).
+Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the system map plus the board and provider models — before touching the HAL boundary, adding a board, or adding a provider.
 
 ## Build / flash
 
@@ -120,7 +105,7 @@ The boot screen is `SCREEN_SPLASH` and only advances on a physical button press,
 7. **Touch axis swap/mirror is per-board.** The 2.16's CST9220 needs `setSwapXY(true)` + `setMirrorXY(true, false)` — applied inside `boards/waveshare_amoled_216/touch.cpp::touch_hal_init()`. New ports apply their own.
 8. **LVGL RGB565A8 is planar.** `w*h` RGB565 pixels followed by `w*h` alpha bytes; `data_size = w*h*3`, `stride = w*2`. Use `init_icon_dsc(dsc, w, h, data, LV_COLOR_FORMAT_RGB565A8)` for icons that overlap non-uniform backgrounds (e.g. battery over splash). Lucide source PNGs are black-on-transparent — converter must tint to white or icons render invisible. See `tools/png_to_lvgl.js`.
 9. **Per-board pre-init is `board_init()`.** Each board's `board_init.cpp` brings up `Wire` and any reset-gating IO expander BEFORE `display_hal_init()`. Skipping the IO expander release on AMOLED-1.8 leaves SH8601 + FT3168 in reset and they silently fail to probe.
-10. **No `#ifdef BOARD_*` in shared code.** The whole point of the refactor — if you're about to add one, you probably want a `BoardCaps` field or a per-board file instead. See `docs/porting/capability-flags.md`.
+10. **No board-*identity* `#ifdef` in shared code.** Branch on capability, never on *which* board: use a `BoardCaps` field (runtime) or `#ifdef BOARD_HAS_*` (compile-time) — never `#ifdef BOARD_<name>`. Capability macros ARE allowed in shared code (`main.cpp`/`splash.cpp` gate large-buffer paths on `BOARD_HAS_PSRAM`); only board-identity branches are banned. See `docs/porting/capability-flags.md`.
 
 ## Icons & splash regen (tooling-driven)
 
